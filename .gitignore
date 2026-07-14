@@ -243,3 +243,8 @@ htmlcov/
 # Type checking caches
 .mypy_cache/
 .dmypy.json
+
+
+
+#plans folder
+plans_builds/
