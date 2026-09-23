@@ -79,7 +79,7 @@ RERANK_MODEL=ms-marco-MiniLM-L-12-v2
 # Max sequence length (lower = faster, adjust based on chunk size)
 RERANK_MAX_LENGTH=128
 
-# Number of candidates to return after reranking
+# Minimum candidate pool retrieved before final top-K selection
 RERANK_TOP_N=10
 ```
 
@@ -97,8 +97,8 @@ RERANK_TOP_N=10
 
 | Environment | Compatible? | Notes |
 |-------------|-------------|-------|
-| AWS Lambda (standard) | Yes | Model fits in 512MB /tmp |
-| AWS Lambda (container) | Yes | Use `cache_dir="/opt"` |
+| AWS Lambda (standard) | Yes | Model is cached under writable `/tmp/flashrank` |
+| AWS Lambda (container) | Yes | Uses `/tmp/flashrank`; pre-bake a model only with custom packaging |
 | EC2 (1GB RAM) | Yes | ~100-150MB additional RAM |
 | EC2 (512MB RAM) | Tight | May cause memory pressure |
 | Docker | Yes | Model cached in container |
@@ -109,11 +109,12 @@ RERANK_TOP_N=10
 
 ```
 1. User query arrives
-2. Hybrid search retrieves top-K candidates (e.g., 30)
+2. Dense search retrieves a broad candidate set; BM25 fusion reorders it
 3. If RERANK_ENABLED=true:
-   a. FlashRank cross-encoder scores each (query, document) pair
-   b. Results sorted by reranker score
-   c. Top-N results returned
+   a. Retrieval returns at least `RERANK_TOP_N` candidates
+   b. FlashRank cross-encoder scores each (query, document) pair
+   c. Results are sorted by reranker score
+   d. The caller-requested top-K results are returned
 4. Results passed to LLM for answer generation
 ```
 
@@ -122,6 +123,7 @@ RERANK_TOP_N=10
 - `app/services/reranking_service.py` — FlashRank wrapper with lazy-loaded singleton
 - `app/services/pinecone_service.py` — `smart_query()` calls reranker after retrieval
 - `app/config.py` — Configuration fields (`rerank_enabled`, `rerank_model`, etc.)
+- `docs/RETRIEVAL_PIPELINE.md` — End-to-end PDR, hybrid scoring, score semantics, and limitations
 
 ## When to Use Reranking
 

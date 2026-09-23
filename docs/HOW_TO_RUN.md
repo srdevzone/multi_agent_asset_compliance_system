@@ -26,7 +26,31 @@ Before you begin, ensure you have the following installed and configured:
    - `DYNAMODB_TABLE_NAME`: The AWS DynamoDB table for audit runs.
    - `PINECONE_API_KEY`: Your Pinecone API key.
    - `PINECONE_HOST`: Your Pinecone index host URL.
-   - **LLM API Keys**: Provide at least one valid key (e.g., `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`) based on your configured `model_provider` in `app/config.py`.
+    - **LLM API Keys**: Provide at least one valid key (e.g., `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`) based on your configured `model_provider` in `app/config.py`.
+
+### Retrieval options
+
+Hybrid BM25/dense candidate scoring and parent-document retrieval are enabled by default. FlashRank reranking is optional:
+
+```bash
+HYBRID_SEARCH_ENABLED=true
+HYBRID_ALPHA=0.7
+BM25_K1=1.5
+BM25_B=0.75
+
+PDR_ENABLED=true
+PDR_PARENT_CHUNK_SIZE=2048
+PDR_CHILD_CHUNK_SIZE=256
+PDR_CHILD_OVERLAP=32
+
+# Optional local cross-encoder (adds model download, RAM use, and latency)
+RERANK_ENABLED=false
+RERANK_MODEL=ms-marco-MiniLM-L-12-v2
+RERANK_MAX_LENGTH=128
+RERANK_TOP_N=10
+```
+
+See [RETRIEVAL_PIPELINE.md](RETRIEVAL_PIPELINE.md) for behavior and deployment considerations.
 
 *Note: If running in AWS natively, the application will automatically attempt to bootstrap missing environment variables from AWS Systems Manager (SSM) Parameter Store using the `/compliance-ai/dev/` prefix.*
 

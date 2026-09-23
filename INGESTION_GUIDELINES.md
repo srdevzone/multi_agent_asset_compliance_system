@@ -19,7 +19,7 @@ When registering a file, you must assign one of the following classification tag
 ### File Format Requirements
 | File Type | Supported Formats | Processing Method | Preparation Guidelines |
 | :--- | :--- | :--- | :--- |
-| **Documents** | PDF (`.pdf`) | Text extracted page-by-page (using `pypdf`) and split into overlapping character-level chunks. | **Must contain text layers.** If you have scanned physical paper, run **OCR (Optical Character Recognition)** before uploading. Passwords or encryption must be removed. |
+| **Documents** | PDF (`.pdf`) | Text extracted page-by-page with `pypdf`; by default, small searchable child chunks retain larger parent context. | **Must contain text layers.** If you have scanned physical paper, run **OCR (Optical Character Recognition)** before uploading. Passwords or encryption must be removed. |
 | **Images** | JPEG (`.jpg`, `.jpeg`), PNG (`.png`), WebP (`.webp`) | Transmitted as Base64 to **Claude LLM Vision** to produce a dense text description, which is then embedded as a single vector. | Use high-resolution images. Ensure labels, barcodes, rating plates, or warning stickers are legible, well-lit, and un-obscured. |
 
 ---
@@ -53,6 +53,12 @@ To maximize RAG retrieval efficiency and compliance audit accuracy:
 * **Stable Document IDs (`doc_id`):** Your main database (e.g., backend client) must assign and maintain stable, unique identifiers for documents. When replacing a manual, keep the same `doc_id` and send it with the `update` lifecycle event.
 * **Keep Documents Segmented:** Rather than merging all manuals into one giant PDF, upload them as separate S3 keys and register them as individual items. This ensures accurate source-attribution and file citations.
 * **Avoid Non-Standard File Types:** Word documents (`.docx`), Excel files (`.xlsx`), or plain text (`.txt`) are not natively chunked. Convert text guidelines into PDFs before uploading to S3.
+
+### Parent-document retrieval considerations
+
+Parent-document retrieval is enabled by default (`PDR_ENABLED=true`). Child chunks are embedded for precise matching, while parent text is retained in metadata and included in downstream prompts. Changing `PDR_PARENT_CHUNK_SIZE`, `PDR_CHILD_CHUNK_SIZE`, or `PDR_CHILD_OVERLAP` affects only newly ingested documents. Re-ingest existing documents if they must use the new chunk layout or carry parent context.
+
+Hybrid BM25/dense scoring and optional FlashRank reranking happen at query time; they do not require additional sparse vectors during ingestion. See [docs/RETRIEVAL_PIPELINE.md](docs/RETRIEVAL_PIPELINE.md).
 
 ---
 
