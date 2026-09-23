@@ -8,6 +8,7 @@ Documents within the namespace are distinguished by doc_id metadata.
 Retrieval modes:
   - Broad (audit / chat): top-k across entire namespace, no filter
   - Filtered (update / delete): filter on doc_id to scope to one document
+  - Hybrid (BM25 + Dense): combines dense similarity with keyword matching
 
 All public functions include tenacity retry logic for transient API errors.
 """
@@ -17,9 +18,24 @@ from typing import Any
 import structlog
 from pinecone import Index
 
+from app.config import get_settings
+from app.services.bm25_service import BM25Encoder
+from app.services.reranking_service import rerank
 from app.utils.resilience import pinecone_call
 
 logger = structlog.get_logger(__name__)
+
+
+def _normalize_scores(scores: list[float]) -> list[float]:
+    """Normalize scores to [0, 1] range using min-max normalization."""
+    if not scores:
+        return scores
+    min_score = min(scores)
+    max_score = max(scores)
+    score_range = max_score - min_score
+    if score_range == 0:
+        return [1.0] * len(scores)
+    return [(s - min_score) / score_range for s in scores]
 
 
 def namespace_for(asset_id: str) -> str:
@@ -133,6 +149,163 @@ def query_namespace(
         doc_type_filter=doc_type_filter,
     )
     return results
+
+
+def query_namespace_hybrid(
+    index: Index,
+    asset_id: str,
+    query_vector: list[float],
+    query_text: str,
+    top_k: int,
+    doc_type_filter: str | None = None,
+    alpha: float | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Query with hybrid search combining dense vectors and BM25 sparse scoring.
+
+    The underlying Pinecone request already owns retry and circuit-breaker
+    behavior through query_namespace(); this local fusion layer deliberately
+    does not wrap it again.
+
+    Uses score fusion: final_score = alpha * dense_score + (1 - alpha) * bm25_score
+
+    Args:
+        index: Pinecone index client
+        asset_id: Asset UUID for namespace
+        query_vector: Dense embedding vector for the query
+        query_text: Raw query text for BM25 scoring
+        top_k: Number of results to return
+        doc_type_filter: Optional filter on document type
+        alpha: Weight for dense score (0.0-1.0). If None, uses config default.
+
+    Returns:
+        List of result dicts with fused scores: id, score, metadata
+    """
+    settings = get_settings()
+    if alpha is None:
+        alpha = settings.hybrid_alpha
+
+    # Step 1: Get a broader dense candidate set. BM25 is applied to this set,
+    # so the encoder is fitted per query rather than kept as mutable process
+    # state (which would be lost on cold starts and leak vocabulary across assets).
+    dense_results = query_namespace(
+        index, asset_id, query_vector, min(top_k * 3, 100), doc_type_filter
+    )
+
+    if not dense_results:
+        return []
+
+    # Step 2: Fit and score BM25 over this query's candidate corpus.
+    candidate_texts = [r["metadata"].get("text", "") for r in dense_results]
+    bm25 = BM25Encoder(k1=settings.bm25_k1, b=settings.bm25_b).fit(candidate_texts)
+    bm25_scores = bm25.score_documents(query_text, candidate_texts)
+
+    # Step 3: Normalize both score sets to [0, 1] range
+    dense_scores = [r["score"] for r in dense_results]
+    normalized_dense = _normalize_scores(dense_scores)
+    normalized_bm25 = _normalize_scores(bm25_scores)
+
+    # Step 4: Compute fused scores
+    fused_results = []
+    for i, result in enumerate(dense_results):
+        fused_score = alpha * normalized_dense[i] + (1 - alpha) * normalized_bm25[i]
+
+        fused_results.append(
+            {
+                "id": result["id"],
+                "score": fused_score,
+                "metadata": result["metadata"],
+                "dense_score": dense_scores[i],
+                "bm25_score": bm25_scores[i],
+            }
+        )
+
+    # Step 5: Sort by fused score and return top_k
+    fused_results.sort(key=lambda x: x["score"], reverse=True)
+    top_results = fused_results[:top_k]
+
+    logger.debug(
+        "pinecone_hybrid_query_complete",
+        namespace=namespace_for(asset_id),
+        top_k=top_k,
+        alpha=alpha,
+        candidates=len(dense_results),
+        results_returned=len(top_results),
+        doc_type_filter=doc_type_filter,
+    )
+    return top_results
+
+
+async def smart_query(
+    index: Index,
+    asset_id: str,
+    query_vector: list[float],
+    query_text: str,
+    top_k: int,
+    doc_type_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Query with automatic dispatch between hybrid and dense-only search,
+    followed by optional local reranking as a second-pass relevance filter.
+
+    Retrieval flow:
+      1. Initial retrieval — hybrid (BM25 + dense) or dense-only
+      2. (optional) Reranking — FlashRank cross-encoder re-scores top candidates
+      3. Return top_k results sorted by final relevance
+
+    This is the recommended query function for callers that don't need
+    fine-grained control over the search mode.
+    """
+    settings = get_settings()
+
+    # Retrieve a wider candidate pool when reranking is enabled. The reranker
+    # then reduces it to the caller-requested top_k.
+    retrieval_k = max(top_k, settings.rerank_top_n) if settings.rerank_enabled else top_k
+
+    # Step 1: Initial retrieval
+    if settings.hybrid_search_enabled:
+        results = query_namespace_hybrid(
+            index, asset_id, query_vector, query_text, retrieval_k, doc_type_filter
+        )
+    else:
+        results = query_namespace(index, asset_id, query_vector, retrieval_k, doc_type_filter)
+
+    if not results:
+        return results
+
+    # Step 2: Optional local reranking (FlashRank, no API key needed)
+    if settings.rerank_enabled:
+        candidate_texts = [r["metadata"].get("text", "") for r in results]
+        reranked = await rerank(
+            query=query_text,
+            documents=candidate_texts,
+            top_n=top_k,
+        )
+        if reranked:
+            # Reorder results by reranker relevance score
+            valid_reranked = [
+                r
+                for r in reranked
+                if isinstance(r.get("index"), int) and 0 <= r["index"] < len(results)
+            ]
+            reranked_indices = [r["index"] for r in valid_reranked]
+            reranked_results = [results[i] for i in reranked_indices]
+            # Overwrite scores with reranker relevance scores
+            for i, r in enumerate(valid_reranked):
+                reranked_results[i]["retrieval_score"] = reranked_results[i]["score"]
+                reranked_results[i]["score"] = r["relevance_score"]
+                reranked_results[i]["rerank_score"] = r["relevance_score"]
+            results = reranked_results
+
+            logger.debug(
+                "smart_query_reranked",
+                namespace=namespace_for(asset_id),
+                top_k=top_k,
+                before=len(candidate_texts),
+                after=len(results),
+            )
+
+    return results[:top_k]
 
 
 def namespace_has_docs(index: Index, asset_id: str) -> bool:

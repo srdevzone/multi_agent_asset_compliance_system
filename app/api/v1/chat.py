@@ -56,11 +56,8 @@ Rules:
 
 
 def _build_rag_context(chunks: list[dict[str, Any]]) -> str:
-    """Format retrieved Pinecone chunks as context, delegating to the shared formatter."""
-    flat_chunks = [
-        {**c["metadata"], "filename": c["metadata"].get("filename", "unknown")} for c in chunks
-    ]
-    return format_chunks_for_prompt(flat_chunks, separator="\n\n---\n\n")
+    """Format retrieved Pinecone chunks as a structured context block."""
+    return format_chunks_for_prompt(chunks, separator="\n\n---\n\n")
 
 
 def _build_spec_context(
@@ -104,15 +101,25 @@ async def query_asset(
     query_vector = await embed_query(embeddings, request.question)
 
     # ── Tier 1: Pinecone RAG ─────────────────────────────────────────────────
-    raw_results = pinecone_service.query_namespace(
+    # Use smart query that automatically dispatches between hybrid and dense-only
+    raw_results = await pinecone_service.smart_query(
         index,
         request.asset_id,
         query_vector,
+        request.question,
         top_k=settings.retrieval_top_k_chat,
         doc_type_filter=request.doc_type_filter,
     )
 
-    top_score = raw_results[0]["score"] if raw_results else 0.0
+    # The fallback threshold is calibrated for Pinecone's dense similarity,
+    # not min-max fused or cross-encoder scores.
+    top_score = (
+        raw_results[0].get(
+            "dense_score", raw_results[0].get("retrieval_score", raw_results[0]["score"])
+        )
+        if raw_results
+        else 0.0
+    )
     search_path: Literal["pinecone_rag", "asset_spec", "web_search"] = "pinecone_rag"
     web_search_used = False
     context = ""

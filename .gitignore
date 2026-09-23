@@ -239,6 +239,10 @@ samconfig.toml.bak
 # Generated env JSON (make env-to-json)
 .env.json
 
+# Type checking caches
+.mypy_cache/
+.dmypy.json
+
 # Local offline storage
 .local_storage/
 

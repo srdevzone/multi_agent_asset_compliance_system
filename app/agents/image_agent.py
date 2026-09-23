@@ -91,7 +91,7 @@ async def image_agent_node(state: AuditState) -> dict[str, Any]:
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     for s3_key, result in zip(s3_image_keys, results, strict=False):
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
             # The exception is already logged inside _process_single_image
             new_errors.append(f"image_agent: {s3_key}: {result}")
         else:

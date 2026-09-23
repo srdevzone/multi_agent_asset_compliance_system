@@ -16,10 +16,11 @@ Populates: state["triggered_rules"]
 """
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 import structlog
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from pydantic import BaseModel
 
 from app.agents.state import AuditState, get_asset_spec_dict
@@ -72,7 +73,7 @@ class RulesOutput(BaseModel):
 
 
 @llm_retry
-async def _call_rule_llm(llm: Any, messages: list) -> RulesOutput:
+async def _call_rule_llm(llm: Any, messages: Sequence[BaseMessage]) -> RulesOutput:
     """Helper to call rule agent LLM with circuit breaker."""
     return await call_structured_llm(llm, RulesOutput, messages, "llm_rule")
 

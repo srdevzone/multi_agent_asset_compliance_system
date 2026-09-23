@@ -47,6 +47,7 @@ os.environ.update(
         "EMBEDDING_DIMENSIONS": "1536",
         "API_SECRET_KEY": "test-secret-key-minimum-32-chars-long",
         "APP_ENV": "development",
+        "LOCAL_OFFLINE": "false",
         "LOG_LEVEL": "DEBUG",
         "DYNAMODB_AUDIT_TABLE": "test-audit-runs-table",
         "CORS_ALLOWED_ORIGINS": '["*"]',
@@ -59,6 +60,18 @@ os.environ.update(
 
 # ── Global patches for LangChain init factories to support mock_provider/mock_model ────
 from unittest.mock import patch
+
+from app.utils.circuit_breaker import _breakers
+
+
+@pytest.fixture(autouse=True)
+def reset_circuit_breakers():
+    """Prevent an intentionally failed service test from leaking into the next test."""
+    for breaker in _breakers.values():
+        breaker.failure_count = 0
+        breaker.last_failure_time = 0.0
+        breaker.state = "CLOSED"
+    yield
 
 
 def _create_mock_chat_model_instance(*args, **kwargs):
@@ -170,16 +183,6 @@ def mock_dynamodb_table():
             ],
         )
         yield client
-
-
-@pytest.fixture(autouse=True)
-def reset_circuit_breakers():
-    """Reset all circuit breakers before each test to prevent state leakage."""
-    from app.utils.circuit_breaker import _breakers
-
-    _breakers.clear()
-    yield
-    _breakers.clear()
 
 
 @pytest.fixture()

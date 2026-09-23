@@ -16,6 +16,7 @@ Design decisions:
 """
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import structlog
@@ -37,7 +38,9 @@ def start_node(state: AuditState) -> dict[str, Any]:
     return {}
 
 
-def _with_node_timeout(node_fn: Any) -> Any:
+def _with_node_timeout(
+    node_fn: Callable[[AuditState], Awaitable[dict[str, Any]]],
+) -> Callable[[AuditState], Awaitable[dict[str, Any]]]:
     """Wrap an agent node function with a per-node timeout."""
 
     async def _timed_node(state: AuditState) -> dict[str, Any]:

@@ -8,7 +8,7 @@ The DuckDuckGo client is synchronous, so we run it in a thread
 to avoid blocking the asyncio event loop.
 """
 
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from ddgs import DDGS
@@ -31,7 +31,7 @@ _run_ddg_search_async = run_in_thread(_run_ddg_search)
 @web_search_call
 async def _search_internal(query: str, max_results: int) -> list[dict[str, Any]]:
     """Internal search function with retries and circuit breaking."""
-    return await _run_ddg_search_async(query, max_results)
+    return cast(list[dict[str, Any]], await _run_ddg_search_async(query, max_results))
 
 
 async def search(query: str, max_results: int = 5) -> list[dict[str, Any]]:

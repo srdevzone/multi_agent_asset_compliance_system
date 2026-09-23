@@ -16,13 +16,15 @@ For deep dives into how the system operates and how to run it, please refer to t
 - [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) — A step-by-step narrative of the entire project lifecycle.
 - [docs/PROJECT_FLOW.md](docs/PROJECT_FLOW.md) — Detailed technical architecture and agent flow.
 - [docs/HOW_TO_RUN.md](docs/HOW_TO_RUN.md) — Guide for local setup, Python running, and Docker deployment.
+- [docs/RETRIEVAL_PIPELINE.md](docs/RETRIEVAL_PIPELINE.md) — Parent-document retrieval, hybrid BM25/dense fusion, and optional reranking.
+- [docs/RERANKING_SERVICE.md](docs/RERANKING_SERVICE.md) — FlashRank model and deployment details.
 
 ## How it Works (Core Flow)
 
-1. **Ingestion:** backend client uploads compliance manuals (PDFs) to S3 and calls `/api/v1/ingest`. The AI parses the text, creates vector embeddings (via OpenAI/Anthropic), and stores them in Pinecone under an isolated `asset_id` namespace.
+1. **Ingestion:** backend client uploads compliance manuals (PDFs) to S3 and calls `/api/v1/ingest`. The service creates small searchable child chunks with larger parent context, embeds the children, and stores them in Pinecone under an isolated `asset_id` namespace.
 2. **On-Site Audit:** An auditor uploads photos and remarks via the backend client, triggering the `/api/v1/audit/run` endpoint.
 3. **LangGraph Pipeline:**
-   - **Document Agent:** Semantically searches Pinecone for the exact rules applying to the asset.
+   - **Document Agent:** Retrieves dense Pinecone candidates, fuses semantic and BM25 keyword scores, optionally reranks them with FlashRank, and supplies parent context for the best matches.
    - **Image Agent:** Uses a Vision LLM to analyse the auditor's photos for defects and labels.
    - **Rule Agent:** Cross-references the image findings against the retrieved document rules.
    - **Evidence Agent:** Compiles a traceable "Evidence Bundle" mapping rules to photos/remarks.
@@ -95,7 +97,9 @@ multi_agent_asset_compliance_system/
 │   │   ├── audit.py
 │   │   └── chat.py
 │   ├── services/
-│   │   ├── pinecone_service.py
+│   │   ├── pinecone_service.py   # Dense/hybrid retrieval orchestration
+│   │   ├── bm25_service.py       # Local keyword scoring
+│   │   ├── reranking_service.py  # Optional FlashRank second pass
 │   │   ├── embedding_service.py
 │   │   ├── s3_service.py
 │   │   ├── document_loader.py
@@ -287,6 +291,23 @@ You only need to supply keys for the providers you actually use. You can mix and
 | `RATE_LIMIT_INGEST` | Throttling for document ingestion | 30/minute |
 | `RATE_LIMIT_CHAT` | Throttling for auditor Q&A | 60/minute |
 | `LANGCHAIN_API_KEY` | LangSmith API key for tracing | Optional |
+
+### Retrieval Configuration
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `HYBRID_SEARCH_ENABLED` | Fuse dense and BM25 candidate scores | `true` |
+| `HYBRID_ALPHA` | Dense weight in hybrid fusion | `0.7` |
+| `BM25_K1` / `BM25_B` | BM25 tuning parameters | `1.5` / `0.75` |
+| `PDR_ENABLED` | Enable parent/child document chunking | `true` |
+| `PDR_PARENT_CHUNK_SIZE` | Parent context size in characters | `2048` |
+| `PDR_CHILD_CHUNK_SIZE` | Embedded child size in characters | `256` |
+| `PDR_CHILD_OVERLAP` | Child overlap in characters | `32` |
+| `RERANK_ENABLED` | Enable local FlashRank reranking | `false` |
+| `RERANK_MODEL` | FlashRank cross-encoder model | `ms-marco-MiniLM-L-12-v2` |
+| `RERANK_MAX_LENGTH` | Maximum reranker sequence length | `128` |
+| `RERANK_TOP_N` | Minimum reranking candidate pool | `10` |
+
+See [Retrieval Pipeline](docs/RETRIEVAL_PIPELINE.md) for score semantics, limitations, and operational guidance.
 
 ## Audit Stream Format (NDJSON)
 

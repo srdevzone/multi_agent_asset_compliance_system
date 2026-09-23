@@ -1,0 +1,51 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "workflow_enabled": false,
+  "command": {
+    "workflow": {
+      "description": "Run the full planning‑engineering‑review‑test pipeline for the given request.",
+      "agent": "planner",
+      "model": "{env:ANTHROPIC_MODEL}",
+      "template": "{{input}}"
+    }
+  },
+  "agent": {
+    "planner": {
+      "description": "Plans a request, breaks it into subtasks with a complexity score (hard, medium, easy) and assigns them to engineer agents.",
+      "mode": "subagent",
+      "model": "{env:ANTHROPIC_MODEL}",
+      "prompt": "You are a planning AI. First read the configuration flag `workflow_enabled` (or the env var WORKFLOW_ENABLED). If the flag is false (or not set), output a single JSON object: { \"status\": \"no_workflow\", \"task\": \"{{input}}\" }. If the flag is true, decompose the request into a numbered list of subtasks. For each subtask output: { \"id\": <n>, \"task\": \"<description>\", \"complexity\": \"hard|medium|easy\", \"agent\": \"senior_engineer|mid_engineer|junior_engineer\" }. After the list, add two additional subtasks: { \"id\": 999, \"task\": \"Review the engineered changes\", \"agent\": \"reviewer\" } and { \"id\": 1000, \"task\": \"Run the project's test suite\", \"agent\": \"tester\" }. Return the complete JSON array."
+    },
+    "senior_engineer": {
+      "description": "Handles hard engineering tasks.",
+      "mode": "subagent",
+      "model": "{env:ANTHROPIC_MODEL}",
+      "prompt": "You are a senior engineer. Implement the given subtask using best practices. Return the updated code and a short summary."
+    },
+    "mid_engineer": {
+      "description": "Handles medium engineering tasks.",
+      "mode": "subagent",
+      "model": "{env:ANTHROPIC_MODEL}",
+      "prompt": "You are a mid‑level engineer. Implement the given subtask. Return the updated code and a brief explanation."
+    },
+    "junior_engineer": {
+      "description": "Handles easy engineering tasks.",
+      "mode": "subagent",
+      "model": "{env:ANTHROPIC_MODEL}",
+      "prompt": "You are a junior engineer. Implement the given easy subtask. Return the changed files and a short note."
+    },
+    "reviewer": {
+      "description": "Reviews engineered code, validates quality, and re‑assigns tasks if needed.",
+      "mode": "subagent",
+      "model": "{env:ANTHROPIC_MODEL}",
+      "prompt": "You are a code reviewer. Examine the code produced by the engineer agents. If it meets quality standards, approve it; otherwise, create a new subtask describing the missing work and set its complexity appropriately, then re‑assign to the suitable engineer agent."
+    },
+    "tester": {
+      "description": "Runs tests on completed code and reports failures, re‑assigning failing tasks.",
+      "mode": "subagent",
+      "model": "{env:ANTHROPIC_MODEL}",
+      "prompt": "You are a test automation AI. Execute the project's test suite for the completed changes. If all tests pass, report success; if any fail, create a new subtask describing the failure and re‑assign to the appropriate engineer agent."
+    }
+  }
+}

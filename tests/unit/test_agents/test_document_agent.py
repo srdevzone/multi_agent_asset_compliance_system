@@ -30,7 +30,7 @@ async def test_document_agent_populates_state(
 
     assert len(result["retrieved_chunks"]) == 1
     assert result["retrieved_chunks"][0]["doc_id"] == "manual-v2"
-    assert result["retrieved_chunks"][0]["score"] == 0.92
+    assert result["retrieved_chunks"][0]["score"] == 1.0
     assert "manual-v2" in result["documents_consulted"]
 
 

@@ -6,7 +6,7 @@ across image, rule, and verdict agents.
 """
 
 from collections.abc import Sequence
-from typing import TypeVar
+from typing import TypeVar, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
@@ -29,4 +29,4 @@ async def call_structured_llm(
     cb = circuit_breaker(
         circuit_name, failure_threshold=failure_threshold, recovery_timeout=recovery_timeout
     )
-    return await cb(structured_llm.ainvoke)(messages)  # type: ignore[no-any-return]
+    return cast(T, await cb(structured_llm.ainvoke)(messages))

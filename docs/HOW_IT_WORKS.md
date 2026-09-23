@@ -12,10 +12,10 @@ Before the AI can audit an asset, it needs to know what the rules are.
 2. **API Call:** backend client calls our AI microservice endpoint `POST /api/v1/ingest`. It passes the `asset_id` and the `s3_key` where the file lives.
 3. **Processing:**
    - The AI downloads the raw PDF bytes from S3.
-   - It uses `PyMuPDF` (via our `document_loader.py`) to parse the raw text from every page of the PDF.
-   - The text is split into "chunks" (default 512 characters) with a small overlap to preserve context between paragraphs.
-4. **Vectorisation:** The AI sends these text chunks to an Embedding Model (e.g. OpenAI `text-embedding-3-small`). The model converts the text into mathematical vectors (embeddings) that capture semantic meaning.
-5. **Storage:** The vectors are saved in the **Pinecone Vector Database**. Crucially, they are saved under a specific "namespace" named `asset_<ASSET_ID>`. This ensures the AI never accidentally mixes up the safety manual of a forklift with the safety manual of a boiler.
+   - It uses `pypdf` (via `document_loader.py`) to parse text from every PDF page.
+   - By default, text is split into large parent chunks (2048 characters) and smaller overlapping child chunks (256 characters, 32 overlap).
+4. **Vectorisation:** The AI embeds the small child chunks. Each child retains its parent text as metadata so retrieval can combine precise matching with broader context.
+5. **Storage:** The child vectors and metadata are saved in the **Pinecone Vector Database** under a namespace named `asset_<ASSET_ID>`. This prevents documentation from different assets being mixed.
 
 ---
 
@@ -38,7 +38,7 @@ Once the `/audit/run` endpoint is hit, the AI kicks off a LangGraph State Machin
 
 ### 1. Document Agent
 - **Goal:** Find the specific rules that apply to this exact asset.
-- **Action:** It takes the `asset_spec`, converts it into a search vector, and queries the Pinecone database. It pulls out the top most relevant chunks of text (e.g., the exact paragraph detailing rust tolerance limits).
+- **Action:** It converts the `asset_spec` and auditor remarks into a query, retrieves a broad dense candidate set from Pinecone, and combines dense similarity with BM25 keyword scores. If enabled, FlashRank performs a final cross-encoder rerank. The selected child matches are supplied with their parent context.
 
 ### 2. Image Agent
 - **Goal:** Act as the "eyes" of the audit.
@@ -65,7 +65,7 @@ Once the `/audit/run` endpoint is hit, the AI kicks off a LangGraph State Machin
 After the audit, or during an inspection, the auditor might have questions (e.g., "What is the maximum torque for this bolt?").
 
 1. **API Call:** The auditor asks a question via the `POST /api/v1/chat/query` endpoint.
-2. **Tier 1 (Vector Search):** The AI embeds the question and searches Pinecone. If it finds a highly relevant paragraph in the asset's manual, it answers the question and cites the exact PDF page.
+2. **Tier 1 (Document Retrieval):** The AI embeds the question, runs dense/BM25 hybrid candidate scoring, and optionally reranks the results. If the original dense similarity indicates a sufficiently relevant match, it answers using child text plus parent context and cites the PDF page.
 3. **Tier 2 (Asset Spec Fallback):** If Pinecone doesn't have the answer, the AI attempts to answer using the asset's basic metadata or previous audit history.
 4. **Tier 3 (Web Search):** If the internal data isn't enough, the AI safely searches the public web (using DuckDuckGo or Tavily). It injects the web findings into the prompt but explicitly warns the auditor: *"According to a web search, the answer is..."*
 

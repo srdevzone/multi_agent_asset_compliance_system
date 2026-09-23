@@ -57,6 +57,104 @@ def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     return [c.strip() for c in chunks if c.strip()]
 
 
+def _chunk_text_parent_child(
+    text: str,
+    parent_size: int,
+    child_size: int,
+    child_overlap: int,
+) -> list[dict[str, Any]]:
+    """
+    Split text into parent documents and child chunks for Parent-Document Retrieval.
+
+    Parents are large context windows (e.g., 2048 chars) that provide broad context.
+    Children are smaller retrieval units (e.g., 256 chars) that are embedded and searched.
+
+    Each child chunk carries a reference to its parent's text for context expansion
+    during retrieval.
+
+    Returns:
+        List of dicts with keys: 'parent_text', 'child_text', 'parent_index', 'child_index'
+    """
+    _validate_chunk_params(parent_size, child_size, child_overlap)
+
+    results: list[dict[str, Any]] = []
+    parent_chunks = _chunk_text(text, parent_size, 0)
+
+    for parent_index, parent_text in enumerate(parent_chunks):
+        if not parent_text:
+            continue
+        child_chunks = _chunk_text(parent_text, child_size, child_overlap)
+        for child_index, child_text in enumerate(child_chunks):
+            results.append(
+                {
+                    "parent_text": parent_text,
+                    "child_text": child_text,
+                    "parent_index": parent_index,
+                    "child_index": child_index,
+                }
+            )
+
+    return results
+
+
+def _build_chunk_dict(
+    doc_id: str,
+    content_hash: str,
+    page_num: int,
+    chunk_idx: int,
+    text: str,
+    asset_id: str,
+    doc_type: str,
+    filename: str,
+    parent_text: str | None = None,
+    parent_index: int | None = None,
+) -> dict[str, Any]:
+    """
+    Build a chunk dictionary with metadata for Pinecone upsert.
+
+    Constructs the chunk_id and metadata dict with consistent structure
+    for both PDR and legacy chunking modes.
+    """
+    metadata: dict[str, Any] = {
+        "asset_id": asset_id,
+        "doc_id": doc_id,
+        "doc_type": doc_type,
+        "filename": filename,
+        "chunk_index": chunk_idx,
+        "page": page_num,
+        "embedded_at": utc_now_iso(),
+        "text": text,
+    }
+    if parent_text is not None:
+        metadata["parent_text"] = parent_text
+        metadata["parent_index"] = parent_index
+        metadata["is_child_chunk"] = True
+
+    return {
+        "chunk_id": f"{doc_id}_{content_hash}_p{page_num}_c{chunk_idx}",
+        "text": text,
+        "metadata": metadata,
+    }
+
+
+def _validate_chunk_params(parent_size: int, child_size: int, child_overlap: int) -> None:
+    """Validate parent-child chunking parameters."""
+    if parent_size <= 0:
+        raise ValueError(f"parent_size must be positive, got {parent_size}")
+    if child_size <= 0:
+        raise ValueError(f"child_size must be positive, got {child_size}")
+    if child_overlap < 0:
+        raise ValueError(f"child_overlap must be non-negative, got {child_overlap}")
+    if child_overlap >= child_size:
+        raise ValueError(
+            f"child_overlap ({child_overlap}) must be less than child_size ({child_size})"
+        )
+    if child_size > parent_size:
+        raise ValueError(
+            f"child_size ({child_size}) must be <= parent_size ({parent_size})"
+        )
+
+
 def load_pdf(
     raw_bytes: bytes,
     document: S3Document,
@@ -70,6 +168,11 @@ def load_pdf(
       - text: the chunk content (also stored in metadata for retrieval display)
       - metadata: all fields needed for source attribution
 
+    When PDR is enabled, uses parent-child chunking where:
+      - Parent documents are large context windows (pdr_parent_chunk_size)
+      - Child chunks are smaller retrieval units (pdr_child_chunk_size)
+      - Each child carries its parent's text for context expansion
+
     Empty pages are skipped silently.
     """
     settings = get_settings()
@@ -81,33 +184,52 @@ def load_pdf(
         return []
     chunks: list[dict[str, Any]] = []
     chunk_global_idx = 0
-    content_hash = hashlib.md5(raw_bytes).hexdigest()[:8]
+    content_hash = hashlib.sha256(raw_bytes).hexdigest()[:8]
 
     for page_num, page in enumerate(pages_to_process, start=1):
         page_text = page.extract_text() or ""
         if not page_text.strip():
             continue
 
-        for chunk_text in _chunk_text(page_text, settings.chunk_size, settings.chunk_overlap):
-            chunks.append(
-                {
-                    "chunk_id": f"{document.doc_id}_{content_hash}_p{page_num}_c{chunk_global_idx}",
-                    "text": chunk_text,
-                    "metadata": {
-                        "asset_id": asset_id,
-                        "doc_id": document.doc_id,
-                        "doc_type": document.doc_type,
-                        "filename": document.filename,
-                        "chunk_index": chunk_global_idx,
-                        "page": page_num,
-                        "embedded_at": utc_now_iso(),
-                        # Stored in metadata so it can be returned in retrieval
-                        # results without a separate fetch
-                        "text": chunk_text,
-                    },
-                }
+        if settings.pdr_enabled:
+            parent_child_chunks = _chunk_text_parent_child(
+                page_text,
+                parent_size=settings.pdr_parent_chunk_size,
+                child_size=settings.pdr_child_chunk_size,
+                child_overlap=settings.pdr_child_overlap,
             )
-            chunk_global_idx += 1
+            for pc in parent_child_chunks:
+                chunks.append(
+                    _build_chunk_dict(
+                        doc_id=document.doc_id,
+                        content_hash=content_hash,
+                        page_num=page_num,
+                        chunk_idx=chunk_global_idx,
+                        text=pc["child_text"],
+                        asset_id=asset_id,
+                        doc_type=document.doc_type,
+                        filename=document.filename,
+                        parent_text=pc["parent_text"],
+                        parent_index=pc["parent_index"],
+                    )
+                )
+                chunk_global_idx += 1
+        else:
+            # Legacy mode: flat chunking without parent context
+            for chunk_text in _chunk_text(page_text, settings.chunk_size, settings.chunk_overlap):
+                chunks.append(
+                    _build_chunk_dict(
+                        doc_id=document.doc_id,
+                        content_hash=content_hash,
+                        page_num=page_num,
+                        chunk_idx=chunk_global_idx,
+                        text=chunk_text,
+                        asset_id=asset_id,
+                        doc_type=document.doc_type,
+                        filename=document.filename,
+                    )
+                )
+                chunk_global_idx += 1
 
     logger.info(
         "pdf_loaded",
@@ -115,6 +237,7 @@ def load_pdf(
         filename=document.filename,
         pages=len(reader.pages),
         chunks=len(chunks),
+        pdr_enabled=settings.pdr_enabled,
     )
     return chunks
 
@@ -132,7 +255,7 @@ def load_image_document(
     Storing it as a vector allows the image to participate in semantic
     retrieval queries alongside PDF documents.
     """
-    content_hash = hashlib.md5(description.encode("utf-8")).hexdigest()[:8]
+    content_hash = hashlib.sha256(description.encode("utf-8")).hexdigest()[:8]
     chunk_id = f"{document.doc_id}_{content_hash}_img_0"
     return [
         {

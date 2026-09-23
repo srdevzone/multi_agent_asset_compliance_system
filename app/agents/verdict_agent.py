@@ -16,7 +16,7 @@ import json
 from typing import Any, Literal
 
 import structlog
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from app.agents.state import AuditState, get_asset_spec_dict
@@ -78,7 +78,7 @@ INSTRUCTIONS:
 
 
 @llm_retry
-async def _call_verdict_llm(llm: Any, messages: list) -> VerdictOutput:
+async def _call_verdict_llm(llm: Any, messages: list[BaseMessage]) -> VerdictOutput:
     """Helper to call verdict agent LLM with circuit breaker."""
     return await call_structured_llm(llm, VerdictOutput, messages, "llm_verdict")
 
@@ -90,7 +90,7 @@ def _build_insufficient_data_verdict(
     errors: list[str],
     generated_at: str,
     *,
-    triggered_rules: list | None = None,
+    triggered_rules: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "asset_id": state["asset_id"],

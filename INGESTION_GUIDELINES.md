@@ -39,7 +39,7 @@ When registering a file, you must assign one of the following classification tag
 ### File Format Requirements
 | File Type | Supported Formats | Processing Method | Preparation Guidelines |
 | :--- | :--- | :--- | :--- |
-| **Documents** | PDF (`.pdf`) | Text extracted page-by-page (using `pypdf`) and split into overlapping character-level chunks. | **Must contain text layers.** If you have scanned physical paper, run **OCR (Optical Character Recognition)** before uploading. Passwords or encryption must be removed. |
+| **Documents** | PDF (`.pdf`) | Text extracted page-by-page with `pypdf`; by default, small searchable child chunks retain larger parent context. | **Must contain text layers.** If you have scanned physical paper, run **OCR (Optical Character Recognition)** before uploading. Passwords or encryption must be removed. |
 | **Images** | JPEG (`.jpg`, `.jpeg`), PNG (`.png`), WebP (`.webp`) | Transmitted as Base64 to a **Vision LLM** to produce a dense text description, which is then embedded as a single vector. | Use high-resolution images. Ensure labels, barcodes, rating plates, or warning stickers are legible, well-lit, and un-obscured. |
 
 ### How `doc_type` is inferred on the direct-upload endpoint
@@ -160,6 +160,12 @@ To maximize RAG retrieval efficiency and compliance audit accuracy:
   the S3 key. To keep `doc_id` values predictable, prefer ASCII-only
   filenames. The `doc_id` for a file uploaded as
   `pump_5000_user_guide.pdf` becomes `doc_pump_5000_user_guide`.
+
+### Parent-document retrieval considerations
+
+Parent-document retrieval is enabled by default (`PDR_ENABLED=true`). Child chunks are embedded for precise matching, while parent text is retained in metadata and included in downstream prompts. Changing `PDR_PARENT_CHUNK_SIZE`, `PDR_CHILD_CHUNK_SIZE`, or `PDR_CHILD_OVERLAP` affects only newly ingested documents. Re-ingest existing documents if they must use the new chunk layout or carry parent context.
+
+Hybrid BM25/dense scoring and optional FlashRank reranking happen at query time; they do not require additional sparse vectors during ingestion. See [docs/RETRIEVAL_PIPELINE.md](docs/RETRIEVAL_PIPELINE.md).
 
 ---
 
@@ -510,4 +516,3 @@ EMBEDDING_DIMENSIONS=1536
 | Upload files inline from a browser or script | `/api/v1/ingest/upload` | `POST` multipart |
 | Erase all data for an asset (GDPR) | `/api/v1/admin/assets/{asset_id}` | `DELETE` |
 | Inspect an asset's vector count and audit history | `/api/v1/admin/assets/{asset_id}/stats` | `GET` |
-

@@ -23,10 +23,10 @@ The system relies on **AWS S3** for blob storage, **Pinecone** for vector search
 Before an asset can be audited, the compliance standards (User Manuals, Safety Sheets, Regulations) must be ingested.
 
 1. **Trigger:** The backend client uploads PDF documents to S3 and calls the ingestion endpoint.
-2. **Download & Parse:** The system downloads the raw bytes from S3 and uses PyMuPDF (via `document_loader.py`) to extract text.
-3. **Chunking:** The text is chunked into overlapping segments (default 512 characters, 64 overlap).
-4. **Embedding:** The chunks are sent in batches to the configured Embedding Provider (e.g., `text-embedding-3-small`).
-5. **Storage:** The resulting vectors are upserted into **Pinecone**.
+2. **Download & Parse:** The system downloads the raw bytes from S3 and uses `pypdf` (via `document_loader.py`) to extract text.
+3. **Parent/Child Chunking:** By default, pages are divided into 2048-character parents and overlapping 256-character children. Each child retains its parent text as metadata.
+4. **Embedding:** Child chunks are sent in batches to the configured Embedding Provider (e.g., `text-embedding-3-small`).
+5. **Storage:** The resulting child vectors and parent metadata are upserted into **Pinecone**.
    - **Crucial Isolation:** All vectors for a given asset are stored inside a specific Pinecone namespace (`asset_{asset_id}`). This guarantees strict multi-tenant data isolation.
 
 ---
@@ -39,8 +39,8 @@ The audit runs as a **LangGraph State Machine** consisting of 5 sequential agent
 
 ### Agent 1: Document Agent (`document_agent.py`)
 - **Input:** `asset_spec` (metadata like name, model, manufacturer).
-- **Task:** Generates a semantic search query based on the asset spec and queries Pinecone.
-- **Output:** Retrieves the top-K relevant compliance chunks (e.g., maintenance requirements, safety limits) to be used as ground truth.
+- **Task:** Generates a query from the asset spec and auditor remarks, retrieves dense Pinecone candidates, fuses normalized dense and BM25 scores, and optionally applies FlashRank reranking.
+- **Output:** Returns top-K child matches with parent context (e.g., maintenance requirements and safety limits) to be used as ground truth.
 
 ### Agent 2: Image Agent (`image_agent.py`)
 - **Input:** `s3_image_keys` (field photos uploaded by the auditor).
@@ -71,7 +71,7 @@ The audit runs as a **LangGraph State Machine** consisting of 5 sequential agent
 
 Auditors can ask questions about the asset (e.g., "What is the maximum operating pressure?"). The chat endpoint implements a highly resilient **3-Tier Fallback** strategy:
 
-1. **Tier 1 (Pinecone RAG):** Embeds the question and searches the asset's Pinecone namespace. If the highest similarity score is >= `0.75`, it uses the retrieved documents to answer the question, citing the specific PDF and page number.
+1. **Tier 1 (Pinecone RAG):** Embeds the question and runs the shared retrieval pipeline (dense candidates → BM25 fusion → optional reranking) in the asset namespace. The `0.75` fallback threshold is evaluated against the original dense Pinecone similarity—not normalized fused or reranker scores. Relevant results include parent context and cite the PDF and page.
 2. **Tier 2 (Asset Spec Fallback):** If Pinecone yields no relevant results (score < `0.75`), it falls back to answering using the `asset_spec` metadata and previous historical audit verdicts.
 3. **Tier 3 (Web Search Augmentation):** If relying on Tier 2, the system also executes a web search (via DuckDuckGo/Tavily) using the asset name and question. It injects the web results into the prompt context, explicitly instructing the LLM to inform the user that the answer was sourced from the web, not internal documents.
 

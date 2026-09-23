@@ -1,6 +1,9 @@
 """Unit tests for pinecone_service — all Pinecone calls mocked."""
 
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.services import pinecone_service
 
@@ -82,3 +85,56 @@ def test_namespace_has_docs_false_empty_namespace(mock_pinecone_index):
     """namespace_has_docs returns False when namespace doesn't exist."""
     mock_pinecone_index.describe_index_stats.return_value = MagicMock(namespaces={})
     assert pinecone_service.namespace_has_docs(mock_pinecone_index, "abc") is False
+
+
+def test_hybrid_query_fits_bm25_from_current_candidates():
+    dense_results = [
+        {"id": "semantic", "score": 0.9, "metadata": {"text": "general instructions"}},
+        {"id": "keyword", "score": 0.8, "metadata": {"text": "pressure valve limit"}},
+    ]
+    settings = SimpleNamespace(hybrid_alpha=0.2, bm25_k1=1.5, bm25_b=0.75)
+
+    with (
+        patch("app.services.pinecone_service.get_settings", return_value=settings),
+        patch("app.services.pinecone_service.query_namespace", return_value=dense_results),
+    ):
+        results = pinecone_service.query_namespace_hybrid(
+            MagicMock(), "abc", [0.1], "pressure valve", top_k=2
+        )
+
+    assert results[0]["id"] == "keyword"
+    assert results[0]["bm25_score"] > results[1]["bm25_score"]
+
+
+@pytest.mark.asyncio
+async def test_smart_query_retrieves_wider_pool_for_reranking():
+    candidates = [
+        {"id": str(i), "score": 0.9 - i / 100, "metadata": {"text": f"text {i}"}}
+        for i in range(10)
+    ]
+    settings = SimpleNamespace(
+        hybrid_search_enabled=False,
+        rerank_enabled=True,
+        rerank_top_n=10,
+    )
+    reranked = [
+        {"index": 9, "relevance_score": 0.99, "text": "text 9"},
+        {"index": 0, "relevance_score": 0.9, "text": "text 0"},
+    ]
+
+    with (
+        patch("app.services.pinecone_service.get_settings", return_value=settings),
+        patch(
+            "app.services.pinecone_service.query_namespace", return_value=candidates
+        ) as query,
+        patch(
+            "app.services.pinecone_service.rerank", new=AsyncMock(return_value=reranked)
+        ),
+    ):
+        results = await pinecone_service.smart_query(
+            MagicMock(), "abc", [0.1], "query", top_k=2
+        )
+
+    assert query.call_args.args[3] == 10
+    assert [result["id"] for result in results] == ["9", "0"]
+    assert results[0]["retrieval_score"] == candidates[9]["retrieval_score"]

@@ -45,6 +45,7 @@ class RetrievedChunk(TypedDict):
     page: int | None
     text: str
     score: float
+    parent_text: str | None  # Parent context for PDR mode
 
 
 class AuditState(TypedDict, total=False):
