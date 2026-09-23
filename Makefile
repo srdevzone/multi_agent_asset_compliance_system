@@ -1,4 +1,4 @@
-.PHONY: install install-dev test lint typecheck format local-api sam-local sam-build \
+.PHONY: install install-dev test test-unit test-integration test-cov lint typecheck format format-check local-api sam-local sam-build \
         deploy-staging deploy-prod ssm-bootstrap clean env-to-json
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -55,13 +55,15 @@ env-to-json:
 	python scripts/local_invoke.py --mode env-to-json
 
 sam-local: env-to-json
-	sam local start-api --env-vars .env.json --port 3000
+	sam local start-api --template-file deploy/aws-sam/template.yaml --env-vars .env.json --port 3000
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AWS SAM
 # ─────────────────────────────────────────────────────────────────────────────
 
 sam-build:
+	mkdir -p dependencies/python
+	pip install -r requirements.txt -t dependencies/python
 	sam build --template-file deploy/aws-sam/template.yaml --use-container
 
 deploy-staging:

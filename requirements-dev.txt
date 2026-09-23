@@ -23,5 +23,5 @@ ruff==0.8.3
 # Type checking
 mypy==1.13.0
 
-# HTTPX for async test client (also in prod, but listed explicitly for dev clarity)
+# HTTPX for async test client
 httpx==0.28.1

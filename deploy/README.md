@@ -23,13 +23,38 @@ Located in `deploy/aws-sam/`
 
 Use this if you want to deploy the system as a truly serverless AWS Lambda microservice. This is highly scalable and cost-effective if you have sparse usage.
 
+**Prerequisites:**
+- AWS CLI installed and configured
+- AWS SAM CLI installed
+- SSM parameters configured (see SSM Bootstrap step below)
+
 **How to deploy:**
-1. Ensure the AWS CLI and AWS SAM CLI are installed.
-2. Run the SAM build command from the root of the project:
+
+1. **Bootstrap SSM Parameters** (first-time setup only):
+   
+   The Lambda functions read secrets from AWS Systems Manager Parameter Store. Before deploying, you must create these parameters:
+   
+   ```bash
+   # Run the SSM bootstrap script from the project root
+   make ssm-bootstrap
+   ```
+   
+   Or manually create the required parameters in SSM Parameter Store:
+   - `/asset-compliance/{env}/pinecone_api_key`
+   - `/asset-compliance/{env}/openai_api_key`
+   - `/asset-compliance/{env}/anthropic_api_key`
+   - `/asset-compliance/{env}/image_agent_provider`
+   - `/asset-compliance/{env}/image_agent_model`
+   - (and other agent provider/model parameters)
+   
+   See `infra/ssm_bootstrap.sh` for the full list of required parameters.
+
+2. **Build the SAM application:**
    ```bash
    sam build --template-file deploy/aws-sam/template.yaml --use-container
    ```
-3. Deploy the application:
+
+3. **Deploy the application:**
    ```bash
    sam deploy --config-file deploy/aws-sam/samconfig.toml --config-env default
    ```

@@ -88,15 +88,9 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      - name: Run unit tests
-        run: pytest tests/unit/ -v --tb=short
-
-      - name: Run integration tests
-        run: pytest tests/integration/ -v --tb=short
-
-      - name: Generate coverage report
-        # Threshold must match pyproject.toml [tool.pytest.ini_options] cov-fail-under
-        run: pytest --cov=app --cov-report=xml --cov-fail-under=80
+      - name: Run all tests with coverage
+        # Runs unit and integration tests together with coverage to avoid running tests 3 times
+        run: pytest --cov=app --cov-report=xml --cov-fail-under=80 -v
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -167,17 +161,17 @@ jobs:
           aws-region: us-east-1
 
       - name: SAM Build
-        run: sam build
+        run: sam build --template-file deploy/aws-sam/template.yaml
 
       - name: SAM Deploy (Dry Run)
         # Using --no-execute-changeset simulates a deployment without applying it
         run: >
           sam deploy 
+          --template-file deploy/aws-sam/template.yaml
           --stack-name asset-compliance-staging 
           --capabilities CAPABILITY_IAM 
           --no-execute-changeset 
           --resolve-s3
-          || echo "Dry run complete or dummy credentials prevented full S3 upload"
 
   smoke-test:
     name: Local Smoke Test
@@ -197,11 +191,28 @@ jobs:
         env:
           AWS_REGION: us-east-1
           AWS_DEFAULT_REGION: us-east-1
+          S3_BUCKET_NAME: test-bucket
           PINECONE_API_KEY: dummy
           PINECONE_INDEX_NAME: dummy
           PINECONE_ENVIRONMENT: dummy
+          OPENAI_API_KEY: dummy
+          ANTHROPIC_API_KEY: dummy
+          XAI_API_KEY: dummy
+          IMAGE_AGENT_PROVIDER: openai
+          IMAGE_AGENT_MODEL: gpt-4o
+          RULE_AGENT_PROVIDER: openai
+          RULE_AGENT_MODEL: gpt-4o
+          VERDICT_AGENT_PROVIDER: openai
+          VERDICT_AGENT_MODEL: gpt-4o
+          CHAT_AGENT_PROVIDER: openai
+          CHAT_AGENT_MODEL: gpt-4o
+          EMBEDDING_PROVIDER: openai
+          EMBEDDING_MODEL: text-embedding-3-small
+          EMBEDDING_DIMENSIONS: "1536"
           API_SECRET_KEY: test-secret-key-minimum-32-chars-long
           APP_ENV: staging
+          LOG_LEVEL: DEBUG
+          DYNAMODB_AUDIT_TABLE: test-audit-runs-table
         run: |
           uvicorn app.main:app --host 0.0.0.0 --port 8000 &
           sleep 5

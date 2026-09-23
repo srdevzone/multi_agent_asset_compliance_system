@@ -9,19 +9,17 @@ All external service calls (Pinecone, DynamoDB) are mocked.
 No real AWS or Pinecone calls are made.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-from httpx import ASGITransport, AsyncClient
 
-from app.main import create_app
-
-_API_KEY = "test-secret-key-minimum-32-chars-long"
-_HEADERS = {"X-API-Key": _API_KEY}
+from tests.integration.helpers import patch_dependencies
 
 
 @pytest.mark.asyncio
-async def test_get_asset_stats_returns_correct_structure(mock_pinecone_index, mock_dynamodb_table):
+async def test_get_asset_stats_returns_correct_structure(
+    async_client, auth_headers, mock_pinecone_index, mock_dynamodb_table
+):
     """GET /admin/assets/{asset_id}/stats should return counts from Pinecone and DynamoDB."""
     # Pinecone has 42 vectors in the asset namespace
     ns_mock = MagicMock()
@@ -30,16 +28,11 @@ async def test_get_asset_stats_returns_correct_structure(mock_pinecone_index, mo
         namespaces={"asset_abc-123": ns_mock}
     )
 
-    app = create_app()
-    with (
-        patch("app.dependencies._get_pinecone_index", return_value=mock_pinecone_index),
-        patch("app.dependencies._get_dynamodb_client", return_value=mock_dynamodb_table),
-    ):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(
-                "/api/v1/admin/assets/abc-123/stats",
-                headers=_HEADERS,
-            )
+    with patch_dependencies(pinecone=mock_pinecone_index, dynamodb=mock_dynamodb_table):
+        response = await async_client.get(
+            "/api/v1/admin/assets/abc-123/stats",
+            headers=auth_headers,
+        )
 
     assert response.status_code == 200
     body = response.json()
@@ -51,20 +44,17 @@ async def test_get_asset_stats_returns_correct_structure(mock_pinecone_index, mo
 
 
 @pytest.mark.asyncio
-async def test_get_asset_stats_empty_namespace(mock_pinecone_index, mock_dynamodb_table):
+async def test_get_asset_stats_empty_namespace(
+    async_client, auth_headers, mock_pinecone_index, mock_dynamodb_table
+):
     """GET /admin/assets/{asset_id}/stats with no vectors should return zero count."""
     mock_pinecone_index.describe_index_stats.return_value = MagicMock(namespaces={})
 
-    app = create_app()
-    with (
-        patch("app.dependencies._get_pinecone_index", return_value=mock_pinecone_index),
-        patch("app.dependencies._get_dynamodb_client", return_value=mock_dynamodb_table),
-    ):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(
-                "/api/v1/admin/assets/no-data/stats",
-                headers=_HEADERS,
-            )
+    with patch_dependencies(pinecone=mock_pinecone_index, dynamodb=mock_dynamodb_table):
+        response = await async_client.get(
+            "/api/v1/admin/assets/no-data/stats",
+            headers=auth_headers,
+        )
 
     assert response.status_code == 200
     body = response.json()
@@ -73,7 +63,9 @@ async def test_get_asset_stats_empty_namespace(mock_pinecone_index, mock_dynamod
 
 
 @pytest.mark.asyncio
-async def test_delete_asset_returns_erasure_confirmation(mock_pinecone_index, mock_dynamodb_table):
+async def test_delete_asset_returns_erasure_confirmation(
+    async_client, auth_headers, s3_bucket, mock_pinecone_index, mock_dynamodb_table
+):
     """DELETE /admin/assets/{asset_id} should delete Pinecone vectors and DynamoDB records."""
     # Pinecone: simulate 10 vectors in namespace, 0 after deletion
     before_stats = MagicMock()
@@ -87,16 +79,13 @@ async def test_delete_asset_returns_erasure_confirmation(mock_pinecone_index, mo
     mock_pinecone_index.describe_index_stats.side_effect = [before_stats, after_stats]
     mock_pinecone_index.delete = MagicMock()
 
-    app = create_app()
-    with (
-        patch("app.dependencies._get_pinecone_index", return_value=mock_pinecone_index),
-        patch("app.dependencies._get_dynamodb_client", return_value=mock_dynamodb_table),
+    with patch_dependencies(
+        pinecone=mock_pinecone_index, dynamodb=mock_dynamodb_table, s3=s3_bucket
     ):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.delete(
-                "/api/v1/admin/assets/del-asset",
-                headers=_HEADERS,
-            )
+        response = await async_client.delete(
+            "/api/v1/admin/assets/del-asset",
+            headers=auth_headers,
+        )
 
     assert response.status_code == 200
     body = response.json()
@@ -107,20 +96,19 @@ async def test_delete_asset_returns_erasure_confirmation(mock_pinecone_index, mo
 
 
 @pytest.mark.asyncio
-async def test_delete_asset_empty_namespace(mock_pinecone_index, mock_dynamodb_table):
+async def test_delete_asset_empty_namespace(
+    async_client, auth_headers, s3_bucket, mock_pinecone_index, mock_dynamodb_table
+):
     """DELETE /admin/assets/{asset_id} on asset with no vectors should return 0 deleted."""
     mock_pinecone_index.describe_index_stats.return_value = MagicMock(namespaces={})
 
-    app = create_app()
-    with (
-        patch("app.dependencies._get_pinecone_index", return_value=mock_pinecone_index),
-        patch("app.dependencies._get_dynamodb_client", return_value=mock_dynamodb_table),
+    with patch_dependencies(
+        pinecone=mock_pinecone_index, dynamodb=mock_dynamodb_table, s3=s3_bucket
     ):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.delete(
-                "/api/v1/admin/assets/ghost-asset",
-                headers=_HEADERS,
-            )
+        response = await async_client.delete(
+            "/api/v1/admin/assets/ghost-asset",
+            headers=auth_headers,
+        )
 
     assert response.status_code == 200
     body = response.json()
@@ -128,13 +116,11 @@ async def test_delete_asset_empty_namespace(mock_pinecone_index, mock_dynamodb_t
 
 
 @pytest.mark.asyncio
-async def test_admin_endpoints_require_api_key(mock_pinecone_index):
+async def test_admin_endpoints_require_api_key(async_client, mock_pinecone_index):
     """Admin endpoints should return 401 without X-API-Key."""
-    app = create_app()
-    with patch("app.dependencies._get_pinecone_index", return_value=mock_pinecone_index):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            stats_response = await client.get("/api/v1/admin/assets/abc/stats")
-            delete_response = await client.delete("/api/v1/admin/assets/abc")
+    with patch_dependencies(pinecone=mock_pinecone_index):
+        stats_response = await async_client.get("/api/v1/admin/assets/abc/stats")
+        delete_response = await async_client.delete("/api/v1/admin/assets/abc")
 
     assert stats_response.status_code == 401
     assert delete_response.status_code == 401

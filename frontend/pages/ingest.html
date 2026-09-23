@@ -305,19 +305,19 @@
 
         <!-- Tabbed Container -->
         <div class="ingest-tabs-container">
-          <div class="ingest-tab-headers">
-            <button type="button" class="ingest-tab-header active" data-tab="tab-direct">Direct File Upload</button>
-            <button type="button" class="ingest-tab-header" data-tab="tab-paste">Paste JSON Payload</button>
-            <button type="button" class="ingest-tab-header" data-tab="tab-json-file">Upload JSON File</button>
+          <div class="ingest-tab-headers" role="tablist" aria-label="Ingestion methods">
+            <button type="button" class="ingest-tab-header active" data-tab="tab-direct" role="tab" aria-selected="true" aria-controls="tab-direct">Direct File Upload</button>
+            <button type="button" class="ingest-tab-header" data-tab="tab-paste" role="tab" aria-selected="false" aria-controls="tab-paste">Paste JSON Payload</button>
+            <button type="button" class="ingest-tab-header" data-tab="tab-json-file" role="tab" aria-selected="false" aria-controls="tab-json-file">Upload JSON File</button>
           </div>
 
           <!-- Tab 1 (Direct Upload) -->
-          <div class="ingest-tab-content active" id="tab-direct">
+          <div class="ingest-tab-content active" id="tab-direct" role="tabpanel" aria-labelledby="tab-direct">
             <div class="ingest-file-dropzone" id="direct-upload-dropzone">
               <span class="dropzone-icon">📥</span>
               <div class="dropzone-text">Drag and drop PDFs or images here, or <span style="color: var(--cobalt-primary); font-weight: 600;">browse files</span></div>
               <div class="dropzone-subtext">Supported formats: PDF, PNG, JPG, JPEG (Max: 50MB)</div>
-              <input type="file" id="direct-file-input" multiple accept=".pdf,image/*" style="display: none;">
+              <input type="file" id="direct-file-input" multiple accept=".pdf,image/*" style="display: none;" aria-label="Upload PDF or image files">
             </div>
             
             <div class="upload-progress-container" id="direct-upload-progress-container">
@@ -332,8 +332,9 @@
           </div>
 
           <!-- Tab 2 (Paste JSON Payload) -->
-          <div class="ingest-tab-content" id="tab-paste">
+          <div class="ingest-tab-content" id="tab-paste" role="tabpanel" aria-labelledby="tab-paste">
             <div class="textarea-container">
+              <label for="json-payload-textarea" class="sr-only">JSON Payload</label>
               <textarea 
                 id="json-payload-textarea" 
                 class="textarea-field" 
@@ -357,12 +358,12 @@
           </div>
 
           <!-- Tab 3 (Upload JSON File) -->
-          <div class="ingest-tab-content" id="tab-json-file">
+          <div class="ingest-tab-content" id="tab-json-file" role="tabpanel" aria-labelledby="tab-json-file">
             <div class="ingest-file-dropzone" id="json-file-dropzone">
               <span class="dropzone-icon">📄</span>
               <div class="dropzone-text">Drag and drop an IngestRequest JSON file here, or <span style="color: var(--cobalt-primary); font-weight: 600;">browse file</span></div>
               <div class="dropzone-subtext">Supported formats: .json only</div>
-              <input type="file" id="json-file-input" accept=".json" style="display: none;">
+              <input type="file" id="json-file-input" accept=".json" style="display: none;" aria-label="Upload JSON file">
             </div>
             <div id="json-file-validation-error" class="form-error-msg" style="display: none; margin-top: 12px;"></div>
           </div>

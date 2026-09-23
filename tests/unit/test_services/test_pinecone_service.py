@@ -34,13 +34,10 @@ def test_upsert_vectors_small_batch(mock_pinecone_index):
 def test_delete_by_doc_id_calls_correct_filter(mock_pinecone_index):
     """delete_by_doc_id must list ids by prefix and delete them."""
     mock_pinecone_index.list.return_value = iter([["vec1", "vec2"]])
-    
+
     deleted = pinecone_service.delete_by_doc_id(mock_pinecone_index, "abc", "manual-v2")
-    
-    mock_pinecone_index.list.assert_called_once_with(
-        prefix="abc_manual-v2_",
-        namespace="asset_abc"
-    )
+
+    mock_pinecone_index.list.assert_called_once_with(prefix="abc_manual-v2_", namespace="asset_abc")
     mock_pinecone_index.delete.assert_called_once_with(
         ids=["vec1", "vec2"],
         namespace="asset_abc",

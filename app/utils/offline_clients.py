@@ -1,19 +1,42 @@
 # ruff: noqa: N803, N818
 """
-Local offline mock clients to emulate AWS S3, AWS DynamoDB, and Pinecone.
+Local offline mock clients to emulate AWS S3, AWS DynamoDB, Pinecone, and
+local-only embedding and chat model providers.
 
-Allows full local development and testing without any AWS or Pinecone credentials.
-Uses a SQLite backend for DynamoDB and Pinecone emulations, and the local filesystem
-under `.local_storage/s3/` for S3 emulation.
+Allows full local development and testing without any AWS, Pinecone, or third-party
+LLM credentials. Uses a SQLite backend for DynamoDB and Pinecone emulations,
+the local filesystem under `.local_storage/s3/` for S3 emulation, and
+deterministic zero-vector / canned-text responses for the offline embedding and
+chat model providers.
+
+Public classes in this module:
+
+- :class:`LocalS3Client` — boto3-compatible S3 emulation (put/get/delete/paginate)
+- :class:`LocalDynamoDBClient` — boto3-compatible DynamoDB emulation
+- :class:`LocalPineconeIndex` — Pinecone Index emulation backed by Qdrant
+- :class:`LocalEmbeddings` — offline embeddings provider returning zero-vectors
+- :class:`LocalChatModel` — offline chat model returning canned responses
+- :class:`LocalPaginator` — boto3-compatible paginator for ``list_objects_v2``
 """
 
+import hashlib
 import io
 import sqlite3
 import uuid
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from botocore.exceptions import ClientError
+from langchain_core.callbacks.manager import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
+from langchain_core.embeddings import Embeddings
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -26,18 +49,46 @@ from qdrant_client.models import (
     VectorParams,
 )
 
+# Maximum supported embedding vector dimension. Chosen to comfortably cover
+# the largest models in current production use (OpenAI text-embedding-3-large
+# exposes 3072 dimensions; we add generous headroom).
+_MAX_EMBEDDING_DIMENSIONS: int = 8192
+_MIN_EMBEDDING_DIMENSIONS: int = 1
+
+# Canned text returned by LocalChatModel for every prompt. The text is
+# deliberately stable and informative so downstream parsers that expect
+# non-empty image descriptions do not crash during local development.
+_LOCAL_CHAT_CANNED_TEXT: str = (
+    "Local development placeholder: document described as compliance asset documentation."
+)
+
+# Single-page paginator contract — the offline emulation never truncates.
+_LOCAL_PAGINATOR_MAX_KEYS: int = 1000
+
 # ── S3 Mock Client ────────────────────────────────────────────────────────────
 
 
 class LocalS3Client:
-    """Offline emulation of the boto3 S3 client using the local filesystem."""
+    """Offline emulation of the boto3 S3 client using the local filesystem.
+
+    Exposes the subset of the boto3 S3 client surface used by the application:
+    ``put_object``, ``get_object``, ``generate_presigned_url``,
+    ``get_paginator``, and ``delete_objects``. The :meth:`get_object` method
+    raises :class:`botocore.exceptions.ClientError` with ``Code="NoSuchKey"``
+    when the requested key is missing, matching real boto3 semantics so the
+    ``@s3_call`` resilience decorator behaves identically against this client.
+    """
 
     def __init__(self, storage_dir: Path) -> None:
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
     def put_object(self, Bucket: str, Key: str, Body: Any) -> dict[str, Any]:
-        """Write object bytes to a local file."""
+        """Write object bytes to a local file.
+
+        ``Body`` may be raw ``bytes``, a file-like object exposing ``.read()``,
+        or any object that can be ``str()``-coerced to UTF-8 text.
+        """
         file_path = self.storage_dir / Bucket / Key
         file_path.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(Body, bytes):
@@ -50,7 +101,13 @@ class LocalS3Client:
         return {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
     def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:
-        """Read object bytes from a local file. Raises NoSuchKey ClientError if missing."""
+        """Read object bytes from a local file.
+
+        Raises:
+            ClientError: with ``Code="NoSuchKey"`` when the file does not exist.
+                This mirrors real boto3 behavior so the ``@s3_call`` retry layer
+                treats the offline client identically to the real one.
+        """
         file_path = self.storage_dir / Bucket / Key
         if not file_path.is_file():
             raise ClientError(
@@ -68,11 +125,323 @@ class LocalS3Client:
     def generate_presigned_url(
         self, ClientMethod: str, Params: dict[str, Any], ExpiresIn: int = 3600
     ) -> str:
-        """Return a local file URI representing the presigned URL."""
+        """Return a local file URI representing the presigned URL.
+
+        The ``ExpiresIn`` argument is accepted for signature parity with boto3
+        but is not enforced — the returned URI is always usable while the file
+        exists on disk.
+        """
         bucket = str(Params.get("Bucket", ""))
         key = str(Params.get("Key", ""))
         file_path = (self.storage_dir / bucket / key).resolve()
         return file_path.as_uri()
+
+    def get_paginator(self, paginator_name: str) -> "LocalPaginator":
+        """Return a paginator for the given operation name.
+
+        Args:
+            paginator_name: Must be ``"list_objects_v2"``. Any other value
+                raises :class:`ValueError` to surface caller mistakes early.
+
+        Returns:
+            LocalPaginator bound to this client's ``storage_dir``.
+
+        Raises:
+            ValueError: If ``paginator_name`` is not a supported paginator.
+        """
+        if paginator_name != "list_objects_v2":
+            raise ValueError(
+                f"Unsupported paginator: {paginator_name!r}. "
+                "Only 'list_objects_v2' is supported by LocalS3Client."
+            )
+        return LocalPaginator(self.storage_dir)
+
+    def delete_objects(
+        self,
+        Bucket: str,
+        Delete: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Delete the listed objects from the local bucket directory.
+
+        Mirrors the boto3 ``delete_objects`` response shape exactly: the
+        ``Deleted`` list always contains the keys that were requested, the
+        ``Errors`` list is always empty, and the response carries an HTTP
+        status code of 200. Missing keys are silently skipped — they are
+        reported as deleted (matching boto3 semantics for absent keys when
+        ``Quiet=False``).
+
+        Args:
+            Bucket: Bucket name (maps to a subdirectory under ``storage_dir``).
+            Delete: Mapping of the form
+                ``{"Objects": [{"Key": "<key>"}, ...], "Quiet": bool}``.
+
+        Returns:
+            Dictionary matching the boto3 response schema.
+        """
+        objects: list[dict[str, Any]] = Delete.get("Objects", [])
+        deleted: list[dict[str, Any]] = []
+        for obj in objects:
+            key = obj["Key"]
+            file_path = self.storage_dir / Bucket / key
+            if file_path.is_file():
+                file_path.unlink()
+            deleted.append({"Key": key})
+        return {
+            "Deleted": deleted,
+            "Errors": [],
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+        }
+
+
+# ── S3 Paginator ──────────────────────────────────────────────────────────────
+
+
+class LocalPaginator:
+    """Offline emulation of the boto3 ``list_objects_v2`` paginator.
+
+    Walks ``storage_dir / Bucket / Prefix`` recursively and yields a single
+    page of object metadata. The page shape matches boto3's
+    ``list_objects_v2`` response so that callers (for example,
+    :func:`app.services.s3_service.delete_asset_documents`) work unchanged
+    against this client.
+    """
+
+    def __init__(self, storage_dir: Path) -> None:
+        self.storage_dir = Path(storage_dir)
+
+    def paginate(
+        self,
+        Bucket: str,
+        Prefix: str = "",
+        PaginationConfig: dict[str, Any] | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield a single page of object metadata for the given bucket/prefix.
+
+        Args:
+            Bucket: Bucket name (maps to a subdirectory under ``storage_dir``).
+            Prefix: Key prefix to filter by. Empty string lists the entire
+                bucket.
+            PaginationConfig: Optional boto3 pagination configuration. Accepted
+                for signature parity with boto3; ``MaxKeys`` and
+                ``StartingToken`` are not enforced because the local backend
+                returns a single page.
+
+        Yields:
+            A single dictionary with ``Contents``, ``IsTruncated``, ``Name``,
+            ``Prefix``, and ``MaxKeys`` keys. When the bucket or prefix does
+            not exist, the page contains an empty ``Contents`` list.
+
+        Notes:
+            ``PaginationConfig`` is intentionally accepted and ignored — local
+            storage is fast enough that multi-page pagination is unnecessary
+            and would complicate the on-disk format.
+        """
+        del PaginationConfig  # unused: local storage does not need paging
+        base_path = self.storage_dir / Bucket / Prefix
+        empty_page: dict[str, Any] = {
+            "Contents": [],
+            "IsTruncated": False,
+            "Name": Bucket,
+            "Prefix": Prefix,
+            "MaxKeys": _LOCAL_PAGINATOR_MAX_KEYS,
+        }
+        if not base_path.is_dir():
+            yield empty_page
+            return
+
+        contents: list[dict[str, Any]] = []
+        bucket_root = self.storage_dir / Bucket
+        for file_path in base_path.rglob("*"):
+            if not file_path.is_file():
+                continue
+            try:
+                relative_key = str(file_path.relative_to(bucket_root))
+            except ValueError:
+                # Defensive: if the file escapes the bucket root for any reason
+                # we skip it instead of leaking out-of-tree paths to callers.
+                continue
+            stat_result = file_path.stat()
+            contents.append(
+                {
+                    "Key": relative_key,
+                    "Size": stat_result.st_size,
+                    "LastModified": datetime.fromtimestamp(stat_result.st_mtime, tz=UTC),
+                    "ETag": hashlib.md5(file_path.read_bytes()).hexdigest(),  # noqa: S324
+                }
+            )
+
+        yield {
+            "Contents": contents,
+            "IsTruncated": False,
+            "Name": Bucket,
+            "Prefix": Prefix,
+            "MaxKeys": _LOCAL_PAGINATOR_MAX_KEYS,
+        }
+
+
+# ── Offline Embeddings Provider ──────────────────────────────────────────────
+
+
+class LocalEmbeddings(Embeddings):
+    """Deterministic offline embeddings provider.
+
+    Returns zero-vectors of the configured dimension for every input. This
+    satisfies the :class:`langchain_core.embeddings.Embeddings` interface so it
+    can be substituted for any real provider (OpenAI, Anthropic, etc.) when
+    running in fully-offline local development. Retrieval quality is, of
+    course, degenerate because all vectors are identical — this class exists
+    only to let the ingestion pipeline run end-to-end without network access.
+
+    Invariant:
+        Identical input always produces identical output (all zeros).
+    """
+
+    def __init__(self, dimensions: int) -> None:
+        """Initialise the offline embeddings provider.
+
+        Args:
+            dimensions: Vector dimension count. Must match
+                ``Settings.embedding_dimensions`` so the produced vectors
+                are compatible with the configured Pinecone index.
+
+        Raises:
+            ValueError: If ``dimensions`` is outside the supported range
+                ``[1, 8192]``.
+        """
+        if not isinstance(dimensions, int):
+            raise TypeError(f"dimensions must be an int, got {type(dimensions).__name__}")
+        if dimensions < _MIN_EMBEDDING_DIMENSIONS or dimensions > _MAX_EMBEDDING_DIMENSIONS:
+            raise ValueError(
+                f"embedding_dimensions must be between "
+                f"{_MIN_EMBEDDING_DIMENSIONS} and {_MAX_EMBEDDING_DIMENSIONS}, "
+                f"got {dimensions}"
+            )
+        self.dimensions: int = dimensions
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Return a zero-vector for each input text.
+
+        Args:
+            texts: List of input strings. Not inspected — outputs are
+                deterministic regardless of content.
+
+        Returns:
+            List of zero-vectors, one per input. Each inner list has length
+            ``self.dimensions``.
+
+        Contract:
+            - ``len(result) == len(texts)``
+            - ``len(result[i]) == self.dimensions`` for all ``i``
+            - ``result[i][j] == 0.0`` for all ``i, j``
+        """
+        zero_vector: list[float] = [0.0] * self.dimensions
+        return [list(zero_vector) for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        """Return a single zero-vector of length ``self.dimensions``.
+
+        Args:
+            text: Query string. Not inspected.
+
+        Returns:
+            Zero-vector with length ``self.dimensions``.
+        """
+        return [0.0] * self.dimensions
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Async variant of :meth:`embed_documents`.
+
+        Delegates to the synchronous implementation. No async I/O is
+        performed because the offline provider has no remote dependencies.
+        """
+        return self.embed_documents(texts)
+
+    async def aembed_query(self, text: str) -> list[float]:
+        """Async variant of :meth:`embed_query`.
+
+        Delegates to the synchronous implementation. No async I/O is
+        performed.
+        """
+        return self.embed_query(text)
+
+
+# ── Offline Chat Model Provider ──────────────────────────────────────────────
+
+
+class LocalChatModel(BaseChatModel):
+    """Offline LLM provider returning canned responses.
+
+    Satisfies :class:`langchain_core.language_models.chat_models.BaseChatModel`
+    so it can be used anywhere a chat model is required (image description
+    in the image agent, rule/verdict/chat agent invocations during local
+    development). Every invocation returns a deterministic
+    :class:`AIMessage` whose content is :data:`_LOCAL_CHAT_CANNED_TEXT`,
+    regardless of the input prompt.
+
+    Invariant:
+        :meth:`_generate` MUST NOT raise under any input and MUST NOT
+        perform network I/O. This is required so the agent nodes that
+        consume this model degrade gracefully in fully-offline mode.
+    """
+
+    # Pydantic model fields required by BaseChatModel's serialisation
+    # machinery. ``model_name`` is exposed as the canonical model identifier
+    # in logs and traces; ``temperature`` is a no-op for the canned provider.
+    model_name: str = "local-dummy"
+    temperature: float = 0.0
+
+    @property
+    def _llm_type(self) -> str:
+        """Return the provider discriminator used by LangChain internals."""
+        return "local_dummy"
+
+    @property
+    def _identifying_params(self) -> dict[str, Any]:
+        """Return the model parameters that uniquely identify this instance."""
+        return {"model_name": self.model_name, "temperature": self.temperature}
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """Return a canned :class:`ChatResult` for any input.
+
+        The ``messages``, ``stop``, ``run_manager``, and ``kwargs`` arguments
+        are intentionally accepted but unused: the offline provider always
+        produces the same deterministic output.
+
+        Args:
+            messages: Prompt messages (ignored).
+            stop: Optional stop sequences (ignored).
+            run_manager: Optional callback manager (ignored).
+            **kwargs: Additional keyword arguments (ignored).
+
+        Returns:
+            :class:`ChatResult` containing a single :class:`ChatGeneration`
+            whose :class:`AIMessage` carries the canned description.
+        """
+        del messages, stop, run_manager, kwargs
+        message = AIMessage(content=_LOCAL_CHAT_CANNED_TEXT)
+        generation = ChatGeneration(message=message)
+        return ChatResult(generations=[generation])
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """Async variant of :meth:`_generate`.
+
+        Delegates to the synchronous implementation. No async I/O is
+        performed.
+        """
+        del run_manager  # unused: sync call requires no async callback wiring
+        return self._generate(messages, stop=stop, **kwargs)
 
 
 # ── DynamoDB Mock Client ──────────────────────────────────────────────────────
@@ -406,7 +775,9 @@ class LocalPineconeIndex:
             )
         return QueryResponse(matches=matches)
 
-    def list(self, prefix: str | None = None, namespace: str | None = None, limit: int = 100) -> Any:
+    def list(
+        self, prefix: str | None = None, namespace: str | None = None, limit: int = 100
+    ) -> Any:
         """Simulate Pinecone's list method, returning a generator of ID lists."""
         if not namespace or not self.client.collection_exists(collection_name=namespace):
             return

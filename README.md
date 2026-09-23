@@ -116,13 +116,33 @@ multi_agent_asset_compliance_system/
 │   └── ssm_bootstrap.sh     # Seed SSM Parameter Store from .env
 ├── scripts/
 │   └── local_invoke.py      # Local dev helper
-├── template.yaml            # AWS SAM template
+├── frontend/                # Demo UI for testing the API
+│   ├── index.html           # Main dashboard
+│   ├── css/                 # Stylesheets
+│   ├── js/                  # Client-side JavaScript
+│   └── pages/               # Additional views
+├── deploy/
+│   ├── aws-sam/
+│   │   └── template.yaml    # AWS SAM template
+│   └── docker-ec2/
+│       ├── Dockerfile
+│       └── docker-compose.yml
 ├── samconfig.toml
 ├── requirements.txt
 ├── requirements-dev.txt
 ├── Makefile
 └── .env.example
 ```
+
+### Frontend
+
+The `frontend/` directory contains a static HTML/JS demo UI for interacting with the API directly from a browser. It provides:
+- **Dashboard**: View asset compliance status and audit history
+- **Ingestion**: Upload documents for RAG ingestion
+- **Audit**: Trigger compliance audits and view streaming results
+- **Chat**: Query the auditor Q&A chat interface
+
+The frontend is served by FastAPI when `SERVE_FRONTEND=true` (default in development). In production, it's recommended to deploy the frontend separately or disable it.
 
 ## Quick Start
 
@@ -162,6 +182,32 @@ make test-integration
 # With coverage report
 make test-cov
 ```
+
+### Test Coverage
+
+The test suite is organized into unit and integration tests:
+
+**Unit Tests** (`tests/unit/`):
+- **Agent tests**: Verify each agent's logic with mocked dependencies
+  - `test_document_agent.py`: Pinecone retrieval, chunk parsing, error handling
+  - `test_image_agent.py`: S3 download, LLM vision analysis, concurrent processing
+  - `test_rule_agent.py`: Compliance rule extraction, document cross-referencing
+  - `test_evidence_agent.py`: Evidence aggregation, priority sorting, truncation logic
+  - `test_verdict_agent.py`: Verdict generation, re-audit diff, fallback handling
+- **Service tests**: Mock external API calls (Pinecone, S3, DynamoDB)
+- **Schema tests**: Pydantic model validation, API request/response schemas
+
+**Integration Tests** (`tests/integration/`):
+- End-to-end pipeline tests with mocked LLM responses
+- API endpoint tests with FastAPI TestClient
+- DynamoDB idempotency and GDPR erasure flows
+
+**Critical Test Scenarios**:
+1. Document Agent returns correct chunks given a known Pinecone fixture
+2. Verdict Agent produces `COMPLIANT`/`NON_COMPLIANT` correctly given a fixed Evidence Bundle
+3. Evidence Agent truncation logs warnings when `EVIDENCE_BUNDLE_CAP` is exceeded
+4. Retry logic succeeds on transient LLM failures
+5. Circuit breaker opens after repeated failures and recovers after timeout
 
 ### Code Quality
 
@@ -284,6 +330,56 @@ The `POST /api/v1/audit/run` endpoint streams results as newline-delimited JSON:
 - **Lambda Function URL**: IAM-authenticated (no unauthenticated access)
 - **Docs endpoint**: disabled in production (`APP_ENV=production`)
 - **Logging**: structured JSON — secrets are never logged
+
+## DynamoDB Schema (Audit Logs)
+
+The system uses DynamoDB for audit run idempotency tracking and verdict storage. Each audit run creates a record keyed on `run_id`.
+
+### Table Schema
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `run_id` | String (PK) | Backend client-supplied idempotency key |
+| `asset_id` | String | Asset identifier (indexed via GSI `AssetIdIndex`) |
+| `status` | String | One of: `IN_PROGRESS`, `COMPLETE`, `FAILED`, `ERASED` |
+| `verdict` | String | JSON-encoded verdict dict (set on `COMPLETE`) |
+| `created_at` | String | ISO 8601 UTC timestamp |
+| `updated_at` | String | ISO 8601 UTC timestamp |
+| `expires_at` | Number | Unix epoch for DynamoDB TTL (30-day retention) |
+| `error_message` | String | Error details (set on `FAILED`) |
+
+### Status Lifecycle
+
+```
+IN_PROGRESS → COMPLETE (on successful audit)
+IN_PROGRESS → FAILED (on unrecoverable error)
+Any status → ERASED (on GDPR right-to-erasure)
+```
+
+### Idempotency Behavior
+
+- **Duplicate `run_id`**: Returns HTTP 409 Conflict if audit is `IN_PROGRESS`; returns cached verdict if `COMPLETE`
+- **GDPR Erasure**: Marks all records for an asset as `ERASED` (does not delete immediately)
+- **TTL**: Records automatically expire after 30 days via DynamoDB TTL
+
+### GSI (Global Secondary Index)
+
+- **`AssetIdIndex`**: Queries all audit runs for a given `asset_id`, enabling:
+  - Audit history retrieval
+  - GDPR erasure operations
+  - Asset-level compliance summaries
+
+## Rate Limiting
+
+Rate limits are enforced per **API key** (or per IP for unauthenticated requests). The limits are **global across all Lambda instances** since they are enforced at the FastAPI middleware level using slowapi.
+
+| Endpoint | Default Limit | Notes |
+|----------|---------------|-------|
+| `/api/v1/audit/run` | 10/minute | Per API key |
+| `/api/v1/ingest` | 30/minute | Per API key |
+| `/api/v1/chat/query` | 60/minute | Per API key |
+
+> **Note**: In multi-Lambda deployments, rate limits are per-instance. Consider using API Gateway or a shared Redis store for global rate limiting if needed.
 
 ## License
 

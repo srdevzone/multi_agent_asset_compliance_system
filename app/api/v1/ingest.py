@@ -14,6 +14,7 @@ All document types are processed sequentially within a single Lambda invocation.
 """
 
 import asyncio
+import re
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
@@ -21,7 +22,6 @@ import structlog
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage
 from pinecone import Index
 
 from app.config import Settings
@@ -29,9 +29,23 @@ from app.dependencies import EmbeddingsDep, ImageLLMDep, PineconeDep, S3Dep, Set
 from app.schemas.ingest import IngestRequest, IngestResponse, S3Document
 from app.services import document_loader, pinecone_service, s3_service
 from app.services.embedding_service import embed_texts
+from app.utils.exceptions import bad_request_error
 
 router = APIRouter(prefix="/ingest", tags=["ingestion"])
 logger = structlog.get_logger(__name__)
+
+
+def _empty_ingest_response(asset_id: str, event: str) -> IngestResponse:
+    """Return a no-op ingestion response when processing is skipped."""
+    return IngestResponse(
+        asset_id=asset_id,
+        event=event,
+        documents_processed=0,
+        vectors_upserted=0,
+        vectors_deleted=0,
+        completed_at=datetime.now(UTC),
+        namespace=pinecone_service.namespace_for(asset_id),
+    )
 
 
 async def _describe_image(
@@ -47,10 +61,6 @@ async def _describe_image(
     The description is stored as the vector's text in Pinecone, allowing
     image documents to participate in semantic retrieval.
     """
-    image_b64 = await s3_service.download_as_base64(s3_client, settings.s3_bucket_name, document.s3_key)
-    media_type = s3_service.infer_media_type(document.filename)
-    image_url = f"data:{media_type};base64,{image_b64}"
-
     prompt_text = (
         f"This is an installation or reference image for asset ID '{asset_id}'. "
         "Describe all visible components, labels, connections, measurements, "
@@ -59,11 +69,8 @@ async def _describe_image(
     )
 
     messages = [
-        HumanMessage(
-            content=[
-                {"type": "text", "text": prompt_text},
-                {"type": "image_url", "image_url": {"url": image_url}},
-            ]
+        await s3_service.build_image_message(
+            s3_client, settings.s3_bucket_name, document.s3_key, prompt_text
         )
     ]
 
@@ -93,12 +100,24 @@ async def _ingest_document(
     Returns the number of vectors upserted.
     Callers are responsible for any pre-deletion logic (update events).
     """
-    if document.doc_type == "installation_image":
-        description = await _describe_image(image_llm, s3_client, settings, document, asset_id)
-        chunks = document_loader.load_image_document(document, asset_id, description)
-    else:
-        raw = await s3_service.download_bytes(s3_client, settings.s3_bucket_name, document.s3_key)
-        chunks = document_loader.load_pdf(raw, document, asset_id)
+    try:
+        if document.doc_type == "installation_image":
+            description = await _describe_image(image_llm, s3_client, settings, document, asset_id)
+            chunks = document_loader.load_image_document(document, asset_id, description)
+        else:
+            raw = await s3_service.download_bytes(
+                s3_client, settings.s3_bucket_name, document.s3_key
+            )
+            chunks = document_loader.load_pdf(raw, document, asset_id)
+    except Exception as exc:
+        logger.error(
+            "document_download_error",
+            doc_id=document.doc_id,
+            asset_id=asset_id,
+            error=type(exc).__name__,
+            error_msg=str(exc)[:200],
+        )
+        return 0
 
     if not chunks:
         logger.warning(
@@ -160,15 +179,7 @@ async def ingest_documents(
         # Idempotency guard: if namespace already has vectors, skip processing
         if pinecone_service.namespace_has_docs(index, request.asset_id):
             log.info("ingest_skipped_namespace_exists")
-            return IngestResponse(
-                asset_id=request.asset_id,
-                event=request.event,
-                documents_processed=0,
-                vectors_upserted=0,
-                vectors_deleted=0,
-                completed_at=datetime.now(UTC),
-                namespace=f"asset_{request.asset_id}",
-            )
+            return _empty_ingest_response(request.asset_id, request.event)
 
     elif request.event == "update":
         # update requires exactly one document for surgical replacement
@@ -211,7 +222,7 @@ async def ingest_documents(
         vectors_upserted=total_upserted,
         vectors_deleted=total_deleted,
         completed_at=datetime.now(UTC),
-        namespace=f"asset_{request.asset_id}",
+        namespace=pinecone_service.namespace_for(request.asset_id),
     )
 
 
@@ -242,19 +253,19 @@ async def upload_and_ingest_documents(
         # Idempotency guard: if namespace already has vectors, skip processing
         if pinecone_service.namespace_has_docs(index, asset_id):
             log.info("upload_skipped_namespace_exists")
-            return IngestResponse(
-                asset_id=asset_id,
-                event=event,
-                documents_processed=0,
-                vectors_upserted=0,
-                vectors_deleted=0,
-                completed_at=datetime.now(UTC),
-                namespace=f"asset_{asset_id}",
-            )
+            return _empty_ingest_response(asset_id, event)
 
     documents = []
     # Process each uploaded file: save to S3 first
     for upload_file in files:
+        # Validate asset_id first (BEFORE reading file bytes) to prevent path
+        # traversal and to short-circuit invalid requests without consuming
+        # request body bytes. This is required by the architectural blueprint
+        # (Section 3.2 Rule 6 / 4.5).
+        if not re.match(r"^[a-zA-Z0-9_-]+$", asset_id):
+            raise bad_request_error(
+                "asset_id must contain only alphanumeric characters, hyphens, or underscores"
+            )
         filename = upload_file.filename or "unnamed_file"
         # Generate a safe doc_id and key from filename
         safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in filename)
@@ -281,9 +292,9 @@ async def upload_and_ingest_documents(
         else:
             doc_type = "other"
 
-        # Read file bytes
+        # Read file bytes (only after all input validation has passed)
         raw_bytes = await upload_file.read()
-        
+
         # Save to S3
         await asyncio.to_thread(
             s3_client.put_object,
@@ -327,5 +338,5 @@ async def upload_and_ingest_documents(
         vectors_upserted=total_upserted,
         vectors_deleted=total_deleted,
         completed_at=datetime.now(UTC),
-        namespace=f"asset_{asset_id}",
+        namespace=pinecone_service.namespace_for(asset_id),
     )

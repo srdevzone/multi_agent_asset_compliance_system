@@ -130,7 +130,13 @@
         if (!response.ok) {
           throw new Error(`Failed to load view HTML: ${response.status}`);
         }
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('text/html') && !contentType.includes('text/plain')) {
+          throw new Error('Unexpected content type from view HTML endpoint');
+        }
         const htmlContent = await response.text();
+        // Trusted content: HTML files are served from the app's own /pages/ directory.
+        // No user-controlled data flows into these template files.
         container.innerHTML = htmlContent;
 
         // Load and execute script

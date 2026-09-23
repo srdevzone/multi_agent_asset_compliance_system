@@ -1,386 +1,4 @@
 <!-- Auditor Q&A Page View - Asset Compliance AI -->
-<style>
-  /* Chat specific layout updates */
-  .chat-layout {
-    display: grid;
-    grid-template-columns: 280px 1fr 340px;
-    gap: 24px;
-    height: calc(100vh - 120px);
-    margin-top: 16px;
-  }
-  
-  /* Responsive chat layout */
-  @media (max-width: 1280px) {
-    .chat-layout {
-      grid-template-columns: 240px 1fr 300px;
-      gap: 16px;
-    }
-  }
-  
-  @media (max-width: 1024px) {
-    .chat-layout {
-      grid-template-columns: 1fr;
-      height: auto;
-    }
-    
-    .config-panel {
-      display: none;
-    }
-    
-    .config-panel.mobile-visible {
-      display: flex;
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      z-index: 1001;
-      height: 100vh;
-      margin: 0;
-    }
-    
-    .citations-panel {
-      display: none;
-    }
-    
-    .citations-panel.mobile-visible {
-      display: flex;
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      z-index: 1001;
-      height: 100vh;
-      margin: 0;
-    }
-    
-    .chat-window {
-      height: 70vh;
-      min-height: 500px;
-    }
-  }
-  
-  @media (max-width: 768px) {
-    .chat-window {
-      height: 65vh;
-      min-height: 450px;
-    }
-    
-    .top-settings {
-      flex-direction: column;
-      gap: 12px;
-      align-items: stretch !important;
-    }
-    
-    .top-settings > div {
-      flex-direction: column;
-      gap: 8px;
-    }
-    
-    .message {
-      max-width: 95%;
-    }
-  }
-  
-  /* Config Panel */
-  .config-panel {
-    height: 100%;
-    overflow-y: auto;
-    background-color: var(--slate-900);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-  
-  /* Chat Window */
-  .chat-window {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    background-color: var(--slate-900);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    overflow: hidden;
-  }
-  
-  .chat-messages {
-    flex: 1;
-    overflow-y: auto;
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    background-color: #0b0e14;
-  }
-  
-  .message {
-    max-width: 85%;
-    padding: 14px 18px;
-    border-radius: 8px;
-    font-size: 14px;
-    line-height: 1.5;
-  }
-  
-  .message-user {
-    align-self: flex-end;
-    background-color: var(--cobalt-primary);
-    color: #ffffff;
-    border-top-right-radius: 0;
-  }
-  
-  .message-assistant {
-    align-self: flex-start;
-    background-color: var(--slate-800);
-    color: var(--on-surface);
-    border-top-left-radius: 0;
-    border: 1px solid var(--slate-700);
-  }
-  
-  .message-time {
-    font-size: 10px;
-    color: var(--on-surface-variant);
-    margin-top: 6px;
-    text-align: right;
-  }
-  
-  .search-path-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-family: var(--font-code);
-    font-size: 11px;
-    padding: 3px 8px;
-    border-radius: var(--border-radius-full);
-    margin-bottom: 8px;
-    font-weight: 500;
-  }
-
-  .path-pinecone_rag {
-    background-color: rgba(16, 185, 129, 0.15);
-    color: var(--emerald-success);
-    border: 1px solid rgba(16, 185, 129, 0.3);
-  }
-
-  .path-asset_spec {
-    background-color: rgba(245, 158, 11, 0.15);
-    color: var(--amber-warning);
-    border: 1px solid rgba(245, 158, 11, 0.3);
-  }
-
-  .path-web_search {
-    background-color: rgba(37, 99, 235, 0.15);
-    color: #60a5fa;
-    border: 1px solid rgba(37, 99, 235, 0.3);
-  }
-  
-  /* Input Box */
-  .chat-input-container {
-    padding: 16px 24px;
-    background-color: var(--slate-900);
-    border-top: 1px solid var(--border-color);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  
-  .chat-input-wrapper {
-    display: flex;
-    gap: 12px;
-    align-items: flex-end;
-  }
-  
-  .chat-textarea {
-    flex: 1;
-    height: 48px;
-    max-height: 120px;
-    min-height: 48px;
-    padding: 12px 16px;
-    background-color: #0b0e14;
-    border: 1px solid var(--slate-700);
-    border-radius: var(--border-radius-sm);
-    color: var(--on-surface);
-    font-family: var(--font-body);
-    font-size: 14px;
-    resize: none;
-    transition: all 0.2s ease;
-  }
-  
-  .chat-textarea:focus {
-    outline: none;
-    border-color: var(--cobalt-primary);
-    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
-  }
-  
-  .chat-meta {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 12px;
-    color: var(--on-surface-variant);
-  }
-  
-  /* Citations Panel */
-  .citations-panel {
-    height: 100%;
-    overflow-y: auto;
-    background-color: var(--slate-900);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-  
-  .citation-card {
-    background-color: #0b0e14;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    padding: 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  
-  .citation-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    border-bottom: 1px solid var(--border-color);
-    padding-bottom: 6px;
-    font-size: 12px;
-  }
-  
-  .citation-filename {
-    font-weight: 600;
-    color: var(--on-surface);
-    word-break: break-all;
-  }
-  
-  .citation-meta {
-    font-family: var(--font-code);
-    font-size: 11px;
-    color: var(--on-surface-variant);
-    white-space: nowrap;
-  }
-  
-  .citation-excerpt {
-    font-size: 12px;
-    color: var(--on-surface-variant);
-    line-height: 1.4;
-    font-family: var(--font-code);
-    background-color: rgba(0, 0, 0, 0.3);
-    padding: 6px 8px;
-    border-radius: var(--border-radius-sm);
-    max-height: 100px;
-    overflow-y: auto;
-  }
-
-  .citation-footer {
-    display: flex;
-    justify-content: flex-end;
-    font-size: 11px;
-    color: var(--cobalt-primary);
-    text-decoration: none;
-    font-weight: 500;
-  }
-  
-  /* Top Settings / API Key bar */
-  .top-settings {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background-color: var(--slate-900);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    padding: 16px 24px;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
-    gap: 12px;
-  }
-  
-  .status-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-  }
-  
-  /* Responsive overrides for chat page */
-  @media (max-width: 1200px) {
-    .chat-layout {
-      grid-template-columns: 1fr;
-      height: auto;
-    }
-    
-    .config-panel,
-    .citations-panel {
-      height: auto;
-      max-height: 400px;
-    }
-    
-    .chat-window {
-      min-height: 500px;
-      height: 60vh;
-    }
-  }
-  
-  @media (max-width: 768px) {
-    .top-settings {
-      flex-direction: column;
-      align-items: stretch;
-      padding: 12px 16px;
-    }
-    
-    .message {
-      max-width: 95%;
-    }
-    
-    .chat-messages {
-      padding: 16px;
-    }
-    
-    .chat-input-container {
-      padding: 12px 16px;
-    }
-    
-    .citation-meta {
-      white-space: normal;
-    }
-  }
-  
-  @media (max-width: 480px) {
-    .config-panel,
-    .citations-panel {
-      padding: 16px;
-    }
-    
-    .message {
-      padding: 10px 14px;
-      font-size: 13px;
-    }
-    
-    .chat-textarea {
-      font-size: 13px;
-    }
-  }
-  
-  .status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    display: inline-block;
-  }
-
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-</style>
 
 <div class="page-container">
   <!-- Top-bar configuration status -->
@@ -451,7 +69,7 @@
     <!-- Middle Conversational Chat view -->
     <div class="chat-window col-6">
       <!-- Messages Area -->
-      <div class="chat-messages" id="chat-messages-container">
+      <div class="chat-messages" id="chat-messages-container" role="log" aria-live="polite" aria-label="Chat messages">
         <!-- Empty State (Shown when no messages exist) -->
         <div style="margin: auto; text-align: center; max-width: 400px; color: var(--on-surface-variant);" id="chat-empty-state">
           <div style="font-size: 40px; margin-bottom: 16px;">💬</div>
@@ -463,15 +81,16 @@
       <!-- Input Form Area -->
       <div class="chat-input-container">
         <div class="chat-input-wrapper">
-          <textarea id="chat-question-input" class="chat-textarea" placeholder="Ask a question (e.g. 'What is the maximum pressure specification?')..." max_length="2000"></textarea>
+          <label for="chat-question-input" class="sr-only">Ask a compliance question</label>
+          <textarea id="chat-question-input" class="chat-textarea" placeholder="Ask a question (e.g. 'What is the maximum pressure specification?')..." maxlength="2000" aria-label="Ask a compliance question"></textarea>
           <button class="btn btn-primary" id="chat-send-btn" style="height: 48px; min-width: 80px;" disabled>Send</button>
         </div>
         <div class="chat-meta">
-          <div id="loading-indicator" style="display: none; align-items: center; gap: 8px; color: var(--cobalt-primary);">
+          <div id="loading-indicator" style="display: none; align-items: center; gap: 8px; color: var(--cobalt-primary);" aria-live="polite">
             <span style="animation: spin 1s linear infinite; display: inline-block;">⚙️</span> Consulting compliance agents...
           </div>
           <div style="margin-left: auto;">
-            <span id="char-counter">0</span> / 2000 characters
+            <span id="char-counter" aria-live="polite" aria-atomic="true">0</span> / 2000 characters
           </div>
         </div>
       </div>
@@ -492,11 +111,11 @@
 </div>
 
 <!-- API Key Configuration Modal -->
-<div class="modal-overlay" id="api-key-modal">
+<div class="modal-overlay" id="api-key-modal" role="dialog" aria-modal="true" aria-labelledby="api-key-modal-title">
   <div class="modal">
     <div class="modal-header">
-      <h3 class="modal-title headline-sm">Configure API Key</h3>
-      <button class="modal-close" id="close-api-modal-btn">&times;</button>
+      <h3 class="modal-title headline-sm" id="api-key-modal-title">Configure API Key</h3>
+      <button class="modal-close" id="close-api-modal-btn" aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
       <p class="body-sm" style="color: var(--on-surface-variant); margin-bottom: 16px;">
@@ -515,11 +134,11 @@
 </div>
 
 <!-- Edit Asset Spec Modal -->
-<div class="modal-overlay" id="asset-spec-modal">
+<div class="modal-overlay" id="asset-spec-modal" role="dialog" aria-modal="true" aria-labelledby="spec-modal-title">
   <div class="modal" style="max-width: 600px;">
     <div class="modal-header">
-      <h3 class="modal-title headline-sm">Edit Asset Specification</h3>
-      <button class="modal-close" id="close-spec-modal-btn">&times;</button>
+      <h3 class="modal-title headline-sm" id="spec-modal-title">Edit Asset Specification</h3>
+      <button class="modal-close" id="close-spec-modal-btn" aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
       <p class="body-sm" style="color: var(--on-surface-variant); margin-bottom: 12px;">
@@ -539,11 +158,11 @@
 </div>
 
 <!-- Edit Previous Verdicts Modal -->
-<div class="modal-overlay" id="verdicts-modal">
+<div class="modal-overlay" id="verdicts-modal" role="dialog" aria-modal="true" aria-labelledby="verdicts-modal-title">
   <div class="modal" style="max-width: 600px;">
     <div class="modal-header">
-      <h3 class="modal-title headline-sm">Edit Previous Verdicts</h3>
-      <button class="modal-close" id="close-verdicts-modal-btn">&times;</button>
+      <h3 class="modal-title headline-sm" id="verdicts-modal-title">Edit Previous Verdicts</h3>
+      <button class="modal-close" id="close-verdicts-modal-btn" aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
       <p class="body-sm" style="color: var(--on-surface-variant); margin-bottom: 12px;">

@@ -22,11 +22,15 @@
         this.apiKeyInput.value = window.Config.getApiKey();
       }
 
-      // Bind interaction listeners
-      this.form.addEventListener('submit', this.handleSave.bind(this));
-      this.toggleKeyBtn.addEventListener('click', this.handleToggleKey.bind(this));
-      this.resetBtn.addEventListener('click', this.handleReset.bind(this));
-      this.testBtn.addEventListener('click', this.handleTestConnection.bind(this));
+      this._boundHandleSave = this.handleSave.bind(this);
+      this._boundHandleToggleKey = this.handleToggleKey.bind(this);
+      this._boundHandleReset = this.handleReset.bind(this);
+      this._boundHandleTestConnection = this.handleTestConnection.bind(this);
+
+      this.form.addEventListener('submit', this._boundHandleSave);
+      this.toggleKeyBtn.addEventListener('click', this._boundHandleToggleKey);
+      this.resetBtn.addEventListener('click', this._boundHandleReset);
+      this.testBtn.addEventListener('click', this._boundHandleTestConnection);
     },
 
     handleSave(e) {
@@ -172,8 +176,17 @@
 
     destroy() {
       console.log('Settings controller destroyed');
-      if (this.form) {
-        this.form.removeEventListener('submit', this.handleSave.bind(this));
+      if (this.form && this._boundHandleSave) {
+        this.form.removeEventListener('submit', this._boundHandleSave);
+      }
+      if (this.toggleKeyBtn && this._boundHandleToggleKey) {
+        this.toggleKeyBtn.removeEventListener('click', this._boundHandleToggleKey);
+      }
+      if (this.resetBtn && this._boundHandleReset) {
+        this.resetBtn.removeEventListener('click', this._boundHandleReset);
+      }
+      if (this.testBtn && this._boundHandleTestConnection) {
+        this.testBtn.removeEventListener('click', this._boundHandleTestConnection);
       }
     }
   };

@@ -26,20 +26,23 @@ The backend client reads the stream line-by-line.  It can show progress in the
 UI from the node_complete events, then process the final verdict event.
 """
 
+import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.agents.graph import audit_graph
 from app.agents.state import AuditState
 from app.config import get_settings
 from app.dependencies import DynamoDBDep, SettingsDep
-from app.rate_limiter import limiter  # shared singleton \u2014 avoids circular import
+from app.rate_limiter import limiter  # shared singleton
 from app.schemas.audit import AuditRequest
 from app.services import dynamodb_service
+from app.utils.exceptions import conflict_error
+from app.utils.sanitization import escape_value
 from app.utils.streaming import NodeCompleteEvent, VerdictEvent, serialise_event
 
 router = APIRouter(prefix="/audit", tags=["audit"])
@@ -48,13 +51,14 @@ logger = structlog.get_logger(__name__)
 # Ordered list of node names — used to calculate progress percentage
 _NODE_ORDER = ["document_agent", "image_agent", "rule_agent", "evidence_agent", "verdict_agent"]
 
-# Read rate limit from settings once at module load time.
-# Safe for Lambda warm starts: settings are cached via lru_cache.
-_AUDIT_RATE_LIMIT = get_settings().rate_limit_audit
+# Rate limit is read dynamically to avoid tight coupling at module load time
 
 
 async def _stream_audit(
-    request: AuditRequest, dynamodb_client: Any, table_name: str
+    request: AuditRequest,
+    dynamodb_client: Any,
+    table_name: str,
+    settings: Any,
 ) -> AsyncGenerator[str, None]:
     """
     Async generator yielding NDJSON lines as the LangGraph graph executes.
@@ -67,7 +71,7 @@ async def _stream_audit(
         run_id=request.run_id,
         asset_spec=request.asset_spec,
         s3_image_keys=request.s3_image_keys,
-        auditor_remarks=request.auditor_remarks,
+        auditor_remarks=escape_value(request.auditor_remarks),
         previous_verdicts=[v.model_dump() for v in (request.previous_verdicts or [])],
         errors=[],
     )
@@ -75,11 +79,6 @@ async def _stream_audit(
     final_verdict: dict[str, Any] | None = None
 
     try:
-        import asyncio
-
-        from app.config import get_settings
-        settings = get_settings()
-
         async with asyncio.timeout(settings.audit_timeout_seconds):
             async for event_data in audit_graph.astream(initial_state, stream_mode="updates"):
                 # event_data is a dict: {node_name: partial_state_update}
@@ -106,28 +105,43 @@ async def _stream_audit(
 
         # Persist the verdict so future retries return the cached result
         if final_verdict is not None:
-            logger.info("compliance_verdict_issued", verdict=final_verdict["compliance_status"], business_metric="ComplianceVerdictIssued")
-            dynamodb_service.complete_audit_run(
+            logger.info(
+                "compliance_verdict_issued",
+                verdict=final_verdict["compliance_status"],
+                business_metric="ComplianceVerdictIssued",
+            )
+            await dynamodb_service.complete_audit_run(
                 dynamodb_client, table_name, request.run_id, final_verdict
             )
 
     except TimeoutError:
-        logger.error("audit_stream_timeout", run_id=request.run_id, timeout=settings.audit_timeout_seconds)
-        dynamodb_service.fail_audit_run(dynamodb_client, table_name, request.run_id, f"Audit timed out after {settings.audit_timeout_seconds} seconds")
+        logger.error(
+            "audit_stream_timeout", run_id=request.run_id, timeout=settings.audit_timeout_seconds
+        )
+        await dynamodb_service.fail_audit_run(
+            dynamodb_client,
+            table_name,
+            request.run_id,
+            f"Audit timed out after {settings.audit_timeout_seconds} seconds",
+        )
         # Yield a final error event so the client streaming doesn't just cut off silently
-        yield serialise_event(VerdictEvent(verdict={
-            "asset_id": request.asset_id,
-            "run_id": request.run_id,
-            "compliance_status": "INSUFFICIENT_DATA",
-            "confidence": 0.0,
-            "recommendations": ["Audit timed out. Please try again later."],
-            "verdict_reasoning": "The audit pipeline exceeded the maximum allowed execution time.",
-            "errors": [f"Timeout after {settings.audit_timeout_seconds}s"]
-        }))
+        yield serialise_event(
+            VerdictEvent(
+                verdict={
+                    "asset_id": request.asset_id,
+                    "run_id": request.run_id,
+                    "compliance_status": "INSUFFICIENT_DATA",
+                    "confidence": 0.0,
+                    "recommendations": ["Audit timed out. Please try again later."],
+                    "verdict_reasoning": "The audit pipeline exceeded the maximum allowed execution time.",
+                    "errors": [f"Timeout after {settings.audit_timeout_seconds}s"],
+                }
+            )
+        )
 
     except Exception as exc:
         logger.error("audit_stream_error", run_id=request.run_id, error=type(exc).__name__)
-        dynamodb_service.fail_audit_run(dynamodb_client, table_name, request.run_id, str(exc))
+        await dynamodb_service.fail_audit_run(dynamodb_client, table_name, request.run_id, str(exc))
         raise
 
 
@@ -149,7 +163,7 @@ async def _stream_audit(
         409: {"description": "Audit run is already in progress for this run_id."},
     },
 )
-@limiter.limit(_AUDIT_RATE_LIMIT)
+@limiter.limit(lambda: get_settings().rate_limit_audit)
 async def run_audit(
     request: Request,  # Must be named 'request' for slowapi
     audit_request: AuditRequest,  # Pydantic-validated request body
@@ -158,25 +172,26 @@ async def run_audit(
 ) -> StreamingResponse | JSONResponse:
     """Start the multi-agent audit pipeline and stream results, with idempotency."""
     log = logger.bind(asset_id=audit_request.asset_id, run_id=audit_request.run_id)
-    log.info("audit_run_requested", images=len(audit_request.s3_image_keys), business_metric="AuditRunRequested")
+    log.info(
+        "audit_run_requested",
+        images=len(audit_request.s3_image_keys),
+        business_metric="AuditRunRequested",
+    )
 
     # ── Idempotency check ──────────────────────────────────────────────────────
-    existing = dynamodb_service.get_audit_run(
+    existing = await dynamodb_service.get_audit_run(
         dynamodb_client, settings.dynamodb_audit_table, audit_request.run_id
     )
 
     if existing:
         if existing["status"] == dynamodb_service.STATUS_IN_PROGRESS:
             log.warning("audit_run_already_in_progress")
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "AUDIT_IN_PROGRESS",
-                    "message": (
-                        f"Audit run '{audit_request.run_id}' is already in progress. "
-                        "Wait for it to complete or use a different run_id."
-                    ),
-                },
+            raise conflict_error(
+                message=(
+                    f"Audit run '{audit_request.run_id}' is already in progress. "
+                    "Wait for it to complete or use a different run_id."
+                ),
+                code="AUDIT_IN_PROGRESS",
             )
 
         if existing["status"] == dynamodb_service.STATUS_COMPLETE:
@@ -197,7 +212,7 @@ async def run_audit(
 
     # ── Mark run as IN_PROGRESS before executing the graph ────────────────────
     try:
-        dynamodb_service.put_audit_run(
+        await dynamodb_service.put_audit_run(
             dynamodb_client,
             settings.dynamodb_audit_table,
             audit_request.run_id,
@@ -207,18 +222,15 @@ async def run_audit(
         error_name = type(exc).__name__
         if "ConditionalCheckFailed" in error_name or "ConditionalCheckFailed" in str(exc):
             log.warning("audit_run_race_condition_409")
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "AUDIT_IN_PROGRESS",
-                    "message": f"Audit run '{audit_request.run_id}' was just started by another request.",
-                },
+            raise conflict_error(
+                message=f"Audit run '{audit_request.run_id}' was just started by another request.",
+                code="AUDIT_IN_PROGRESS",
             ) from exc
         raise
 
     log.info("audit_run_started")
     return StreamingResponse(
-        _stream_audit(audit_request, dynamodb_client, settings.dynamodb_audit_table),
+        _stream_audit(audit_request, dynamodb_client, settings.dynamodb_audit_table, settings),
         media_type="application/x-ndjson",
         headers={
             "X-Run-Id": audit_request.run_id,

@@ -15,12 +15,13 @@
       this.citationsContainer = document.getElementById('citations-container');
       this.noCitationsMsg = document.getElementById('no-citations-msg');
 
+      this._boundHandleSubmit = this.handleSubmit.bind(this);
       if (this.form) {
-        this.form.addEventListener('submit', this.handleSubmit.bind(this));
+        this.form.addEventListener('submit', this._boundHandleSubmit);
       }
       
       // Clean dynamic verdict banners if they exist from previous runs
-      this.removeVerdictBanners();
+      window.VerdictBanner.remove();
     },
 
     async handleSubmit(e) {
@@ -32,7 +33,7 @@
       this.setRunningState(true);
       this.clearConsole();
       this.clearCitations();
-      this.removeVerdictBanners();
+      window.VerdictBanner.remove();
 
       this.logToConsole('Initializing compliance pipeline request...', 'info');
 
@@ -176,33 +177,19 @@
 
       if (!this.citationsContainer) return;
 
-      const card = document.createElement('div');
-      card.className = 'citation-card';
-      card.innerHTML = `
-        <div class="citation-header">
-          <span>📄</span>
-          <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${this.escapeHtml(title)}</span>
-        </div>
-        <div class="citation-body">
-          "${this.escapeHtml(text)}"
-        </div>
-        <div class="citation-footer">
-          <span class="citation-score">Match: ${(score * 100).toFixed(0)}%</span>
-          <a href="${url || '#'}" target="_blank" class="citation-link">View Section</a>
-        </div>
-      `;
-      this.citationsContainer.appendChild(card);
+      window.CitationCard.render(this.citationsContainer, {
+        title,
+        text,
+        score,
+        url
+      });
     },
 
     renderFinalVerdict(verdict) {
       this.logToConsole(`Audit decision completed. Compliance status: ${verdict.compliance_status}`, 'success');
       
       if (this.badgeStatus) {
-        let badgeClass = 'badge-insufficient';
-        if (verdict.compliance_status === 'COMPLIANT') badgeClass = 'badge-compliant';
-        if (verdict.compliance_status === 'NON_COMPLIANT') badgeClass = 'badge-non-compliant';
-        if (verdict.compliance_status === 'NEEDS_REVIEW') badgeClass = 'badge-needs-review';
-        
+        const badgeClass = window.Utils.getVerdictBadgeClass(verdict.compliance_status);
         this.badgeStatus.innerText = verdict.compliance_status;
         this.badgeStatus.className = `badge ${badgeClass}`;
       }
@@ -217,57 +204,20 @@
       }
 
       // Insert verdict banner in UI
-      this.removeVerdictBanners();
-      const flexCol = document.querySelector('.chat-layout').parentNode;
-      
-      const banner = document.createElement('div');
-      const isCompliant = verdict.compliance_status === 'COMPLIANT';
-      const isNeedsReview = verdict.compliance_status === 'NEEDS_REVIEW';
-      
-      let verdictClass = 'verdict-banner-non-compliant';
-      if (isCompliant) verdictClass = 'verdict-banner-compliant';
-      else if (isNeedsReview) verdictClass = 'verdict-banner-warning'; // Fallback if styling exists, otherwise non-compliant
-      
-      banner.className = `verdict-banner ${verdictClass}`;
-      banner.id = 'active-verdict-banner';
-      
-      let badgeSymbol = '❌';
-      if (isCompliant) badgeSymbol = '✅';
-      if (isNeedsReview) badgeSymbol = '⚠️';
-
-      banner.innerHTML = `
-        <span style="font-size: 28px;">${badgeSymbol}</span>
-        <div>
-          <h4 class="verdict-title">${verdict.compliance_status} (Confidence: ${(verdict.confidence * 100).toFixed(0)}%)</h4>
-          <p class="body-sm" style="color: inherit; margin: 4px 0 8px 0;">${this.escapeHtml(verdict.verdict_reasoning)}</p>
-          <div class="body-sm">
-            <strong>Recommendations:</strong>
-            <ul style="margin: 4px 0 0 0; padding-left: 20px;">
-              ${verdict.recommendations.map(rec => `<li>${this.escapeHtml(rec)}</li>`).join('')}
-            </ul>
-          </div>
-        </div>
-      `;
-      
-      // Insert right before the chat/console layout
-      const chatLayout = document.querySelector('.chat-layout');
-      if (chatLayout && flexCol) {
-        flexCol.insertBefore(banner, chatLayout);
+      const chatLayoutEl = document.querySelector('.chat-layout');
+      if (chatLayoutEl) {
+        window.VerdictBanner.render(
+          { container: chatLayoutEl.parentNode, before: chatLayoutEl },
+          verdict
+        );
       }
 
       if (window.Toast) {
-        if (isCompliant) {
+        if (verdict.compliance_status === 'COMPLIANT') {
           window.Toast.success('Asset compliance verified: COMPLIANT');
         } else {
           window.Toast.warning(`Compliance alert issued: ${verdict.compliance_status}`);
         }
-      }
-    },
-
-    removeVerdictBanners() {
-      const existing = document.getElementById('active-verdict-banner');
-      if (existing) {
-        existing.remove();
       }
     },
 
@@ -362,20 +312,10 @@
       });
     },
 
-    escapeHtml(str) {
-      if (!str) return '';
-      return str
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-    },
-
     destroy() {
       console.log('Audit controller destroyed');
-      if (this.form) {
-        this.form.removeEventListener('submit', this.handleSubmit.bind(this));
+      if (this.form && this._boundHandleSubmit) {
+        this.form.removeEventListener('submit', this._boundHandleSubmit);
       }
     }
   };

@@ -2,7 +2,14 @@
 
 class ApiClient {
   constructor() {
-    this.baseUrl = window.location.origin;
+    this.baseUrl = (window.Config && window.Config.getApiBaseUrl()) || window.location.origin;
+  }
+
+  updateBaseUrl(url) {
+    this.baseUrl = url;
+    if (window.Config) {
+      window.Config.setApiBaseUrl(url);
+    }
   }
 
   getHeaders() {
@@ -67,7 +74,7 @@ class ApiClient {
   async streamRequest(path, body, onChunk, onError, onComplete) {
     const url = `${this.baseUrl}${path}`;
     const headers = { ...this.getHeaders() };
-    
+
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -84,40 +91,12 @@ class ApiClient {
         throw new Error(errMsg);
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          try {
-            const parsed = JSON.parse(trimmed);
-            onChunk(parsed);
-          } catch (e) {
-            console.warn('Failed to parse NDJSON line:', trimmed, e);
-          }
-        }
-      }
-
-      if (buffer.trim()) {
-        try {
-          const parsed = JSON.parse(buffer.trim());
-          onChunk(parsed);
-        } catch (e) {
-          console.warn('Failed to parse trailing buffer:', buffer, e);
-        }
-      }
-
-      onComplete();
+      await window.StreamReader.read(response, {
+        onNodeComplete: onChunk,
+        onVerdict: (verdict) => onChunk({ event: 'verdict', verdict }),
+        onError: onError,
+        onEnd: onComplete,
+      });
     } catch (err) {
       console.error('Streaming request error:', err);
       onError(err);

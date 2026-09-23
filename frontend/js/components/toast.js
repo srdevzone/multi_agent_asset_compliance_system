@@ -1,6 +1,16 @@
 /* Toast Component - Asset Compliance AI */
 
 (function () {
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
   class ToastManager {
     constructor() {
       this.container = null;
@@ -12,10 +22,12 @@
       this.container = document.getElementById('toast-container');
       if (!this.container) {
         this.container = document.createElement('div');
-        this.container.id = 'toast-container';
-        
-        // CSS Style rules for Toast positioning
-        Object.assign(this.container.style, {
+      this.container.id = 'toast-container';
+      this.container.setAttribute('aria-live', 'assertive');
+      this.container.setAttribute('role', 'status');
+      
+      // CSS Style rules for Toast positioning
+      Object.assign(this.container.style, {
           position: 'fixed',
           top: '24px',
           right: '24px',
@@ -72,8 +84,8 @@
           background-color: var(--${type === 'error' ? 'rose-error' : type === 'success' ? 'emerald-success' : type === 'warning' ? 'amber-warning' : 'cobalt-primary'});
           color: #0b0e14;
         ">${icon}</span>
-        <div style="flex-grow: 1; font-family: var(--font-body); font-size: var(--fs-body-md); color: var(--on-surface); line-height: 1.25;">${message}</div>
-        <button style="
+        <div class="toast-message" style="flex-grow: 1; font-family: var(--font-body); font-size: var(--fs-body-md); color: var(--on-surface); line-height: 1.25;"></div>
+        <button aria-label="Dismiss" style="
           background: none;
           border: none;
           color: var(--on-surface-variant);
@@ -85,9 +97,13 @@
         ">&times;</button>
       `;
 
+      // Set message safely using textContent
+      const msgDiv = toast.querySelector('.toast-message');
+      msgDiv.textContent = escapeHtml(message);
+
       // Set dismiss action
       const closeBtn = toast.querySelector('button');
-      closeBtn.onclick = () => this.dismiss(toast);
+      closeBtn.addEventListener('click', () => this.dismiss(toast));
 
       this.container.appendChild(toast);
 

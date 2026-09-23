@@ -8,14 +8,13 @@ The DuckDuckGo client is synchronous, so we run it in a thread
 to avoid blocking the asyncio event loop.
 """
 
-import asyncio
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from ddgs import DDGS
-from tenacity import retry, stop_after_attempt, wait_exponential
 
-from app.utils.circuit_breaker import circuit_breaker
+from app.utils.async_helpers import run_in_thread
+from app.utils.resilience import web_search_call
 
 logger = structlog.get_logger(__name__)
 
@@ -26,15 +25,13 @@ def _run_ddg_search(query: str, max_results: int) -> list[dict[str, Any]]:
         return list(ddgs.text(query, max_results=max_results))
 
 
-@circuit_breaker("ddg", failure_threshold=2, recovery_timeout=120)
-@retry(
-    stop=stop_after_attempt(2),
-    wait=wait_exponential(multiplier=1, min=1, max=5),
-    reraise=True,
-)
+_run_ddg_search_async = run_in_thread(_run_ddg_search)
+
+
+@web_search_call
 async def _search_internal(query: str, max_results: int) -> list[dict[str, Any]]:
     """Internal search function with retries and circuit breaking."""
-    return await asyncio.to_thread(_run_ddg_search, query, max_results)
+    return cast(list[dict[str, Any]], await _run_ddg_search_async(query, max_results))
 
 
 async def search(query: str, max_results: int = 5) -> list[dict[str, Any]]:

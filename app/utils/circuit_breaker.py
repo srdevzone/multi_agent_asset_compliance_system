@@ -13,17 +13,18 @@ from typing import Any, ParamSpec, TypeVar, cast
 
 import structlog
 
-from app.utils.exceptions import AssetComplianceBaseError
-
 logger = structlog.get_logger(__name__)
 
 T = TypeVar("T")
 P = ParamSpec("P")
 
 
-class CircuitBreakerOpenError(AssetComplianceBaseError):
+class CircuitBreakerOpenError(Exception):
     """Raised when the circuit breaker is OPEN and rejecting calls."""
-    pass
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
 
 
 class CircuitBreaker:
@@ -63,13 +64,16 @@ class CircuitBreaker:
 
         self.failure_count += 1
         self.last_failure_time = time.time()
-        
+
         if self.state != "OPEN" and self.failure_count >= self.failure_threshold:
             self.state = "OPEN"
-            logger.error("circuit_breaker_opened", circuit=self.name, threshold=self.failure_threshold)
+            logger.error(
+                "circuit_breaker_opened", circuit=self.name, threshold=self.failure_threshold
+            )
 
     def __call__(self, func: Callable[P, T]) -> Callable[P, T]:
         if asyncio.iscoroutinefunction(func):
+
             @wraps(func)
             async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
                 self._check_state()
@@ -85,6 +89,7 @@ class CircuitBreaker:
                     raise
             return cast(Callable[P, T], async_wrapper)
         else:
+
             @wraps(func)
             def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
                 self._check_state()

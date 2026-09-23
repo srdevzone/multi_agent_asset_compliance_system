@@ -16,24 +16,21 @@ Populates: state["triggered_rules"]
 """
 
 import json
-from typing import Any, cast
+from collections.abc import Sequence
+from typing import Any
 
 import structlog
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from pydantic import BaseModel
 
 from app.agents.state import AuditState, get_asset_spec_dict
 from app.dependencies import get_rule_agent_llm
 from app.schemas.audit import TriggeredRule
-from app.utils.circuit_breaker import circuit_breaker
 from app.utils.formatting import format_chunks_for_prompt
+from app.utils.llm import call_structured_llm
+from app.utils.retry import llm_retry
 
 logger = structlog.get_logger(__name__)
-
-
-def _format_retrieved_docs(chunks: list[Any]) -> str:
-    """Format retrieved document chunks for the rule analysis prompt."""
-    return format_chunks_for_prompt(chunks)
 
 
 def _format_image_findings(analyses: list[Any]) -> str:
@@ -75,6 +72,12 @@ class RulesOutput(BaseModel):
     triggered_rules: list[TriggeredRule]
 
 
+@llm_retry
+async def _call_rule_llm(llm: Any, messages: Sequence[BaseMessage]) -> RulesOutput:
+    """Helper to call rule agent LLM with circuit breaker."""
+    return await call_structured_llm(llm, RulesOutput, messages, "llm_rule")
+
+
 async def rule_agent_node(state: AuditState) -> dict[str, Any]:
     """
     Identify violated compliance rules by cross-referencing findings with documents.
@@ -87,16 +90,13 @@ async def rule_agent_node(state: AuditState) -> dict[str, Any]:
         asset_spec_json = json.dumps(asset_spec_dict, indent=2)
         prompt = _RULE_PROMPT_TEMPLATE.format(
             asset_spec=asset_spec_json,
-            retrieved_docs=_format_retrieved_docs(state.get("retrieved_chunks", [])),
+            retrieved_docs=format_chunks_for_prompt(state.get("retrieved_chunks", [])),
             image_findings=_format_image_findings(state.get("image_analyses", [])),
             auditor_remarks=state.get("auditor_remarks") or "None provided",
         )
 
-        structured_llm = llm.with_structured_output(RulesOutput)
         messages = [HumanMessage(content=prompt)]
-
-        cb = circuit_breaker("llm", failure_threshold=3, recovery_timeout=60)
-        parsed_obj = cast(RulesOutput, await cb(structured_llm.ainvoke)(messages))
+        parsed_obj: RulesOutput = await _call_rule_llm(llm, messages)
         triggered_dicts = [rule.model_dump() for rule in parsed_obj.triggered_rules]
 
         logger.info(

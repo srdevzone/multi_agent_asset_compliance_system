@@ -30,6 +30,9 @@ export const Config = {
 
   setApiBaseUrl(url) {
     localStorage.setItem('asset_compliance_api_base_url', url);
+    if (window.ApiClient) {
+      window.ApiClient.updateBaseUrl(url);
+    }
   },
 
   save({ apiBaseUrl, apiKey }) {
@@ -42,8 +45,8 @@ export const Config = {
   },
 
   reset() {
+    Object.values(CONFIG_KEYS).forEach(key => localStorage.removeItem(key));
     localStorage.removeItem('asset_compliance_api_base_url');
-    localStorage.removeItem(CONFIG_KEYS.API_KEY);
   },
 
   set(key, value) {
@@ -74,7 +77,7 @@ export const Config = {
     try {
       const logs = this.getActivityLog();
       logs.push({
-        id: 'act-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+        id: 'act-' + Date.now() + '-' + Math.random().toString(36).substring(2, 11),
         type,
         message,
         status,
@@ -177,9 +180,8 @@ export const Config = {
       const response = await fetch('/api/v1/auth/config');
       if (response.ok) {
         const data = await response.json();
-        if (data.dev_mode && data.default_api_key && !this.getApiKey()) {
-          this.setApiKey(data.default_api_key);
-          console.log("Dev mode detected. Auto-filled default API Key.");
+        if (data.dev_mode) {
+          console.log("Dev mode detected.");
         }
         return data;
       }

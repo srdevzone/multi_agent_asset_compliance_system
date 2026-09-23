@@ -12,7 +12,7 @@ Implements the following fallback chain in order:
     from the asset_spec dict and previous_verdicts.
 
   Tier 3 — Web search augmentation:
-    If falling back to tier 2, augment with a Tavily web search using
+    If falling back to tier 2, augment with a DuckDuckGo web search using
     "{asset_name} {question}" as the query. The web context is appended
     to the asset spec context.
 
@@ -26,7 +26,7 @@ The final LLM prompt instructs the model to:
 from typing import Any, Literal
 
 import structlog
-from fastapi import APIRouter, status
+from fastapi import APIRouter, HTTPException, status
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from app.dependencies import ChatLLMDep, EmbeddingsDep, PineconeDep, SettingsDep
@@ -85,7 +85,7 @@ def _build_web_context(results: list[dict[str, Any]]) -> str:
     summary="Query an asset's documents",
     description=(
         "Answer auditor questions using a three-tier fallback: "
-        "Pinecone RAG → asset spec → Tavily web search."
+        "Pinecone RAG → asset spec → DuckDuckGo web search."
     ),
 )
 async def query_asset(
@@ -164,9 +164,19 @@ async def query_asset(
     messages.append(HumanMessage(content=user_turn))
 
     # Adjust model args dynamically if needed, though init_chat_model already set defaults
-    cb = circuit_breaker("llm", failure_threshold=3, recovery_timeout=60)
-    response = await cb(llm.ainvoke)(messages)
-    answer: str = str(response.content)
+    try:
+        cb = circuit_breaker("llm", failure_threshold=3, recovery_timeout=60)
+        response = await cb(llm.ainvoke)(messages)
+        answer: str = str(response.content)
+    except Exception as exc:
+        log.error("chat_llm_error", error=type(exc).__name__, error_detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "LLM_ERROR",
+                "message": "The language model failed to generate a response. Please try again.",
+            },
+        ) from exc
 
     # Build deduplicated source citations from retrieved chunks
     sources: list[SourceCitation] = []

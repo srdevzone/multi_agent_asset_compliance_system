@@ -45,9 +45,9 @@
       const mobileToggle = document.getElementById('mobile-sidebar-toggle');
       const sidebarContainer = document.querySelector('.sidebar-container');
       if (mobileToggle && sidebarContainer) {
-        mobileToggle.onclick = () => {
+        mobileToggle.addEventListener('click', () => {
           sidebarContainer.classList.toggle('active');
-        };
+        });
         
         // Close sidebar on navigate in mobile view
         const navLinks = document.querySelectorAll('.sidebar-nav-link');

@@ -39,10 +39,10 @@
       <div class="card fill-page" style="display: flex; flex-direction: column;">
         <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
           <h3 class="card-title" style="margin-bottom: 0;">Multi-Agent Operational Log</h3>
-          <span id="audit-status-badge" class="badge badge-insufficient">IDLE</span>
+          <span id="audit-status-badge" class="badge badge-insufficient" aria-live="polite">IDLE</span>
         </div>
         <div class="card-body" style="padding: 0; flex: 1; display: flex; flex-direction: column;">
-          <div id="ingest-console" class="streaming-console" style="
+          <div id="ingest-console" class="streaming-console" role="log" aria-live="polite" aria-label="Audit operational log" style="
             flex: 1;
             min-height: 200px;
             overflow-y: auto;

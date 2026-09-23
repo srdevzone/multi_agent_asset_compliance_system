@@ -9,12 +9,6 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
-from app.main import create_app
-
-_API_KEY = "test-secret-key-minimum-32-chars-long"
-_HEADERS = {"X-API-Key": _API_KEY}
 
 _SAMPLE_AUDIT_PAYLOAD = {
     "asset_id": "abc-123",
@@ -56,40 +50,34 @@ def mock_dynamo_dep(mock_dynamodb_table):
 
 
 @pytest.mark.asyncio
-async def test_audit_run_streams_ndjson():
+async def test_audit_run_streams_ndjson(async_client, auth_headers):
     """POST /audit/run should return 200 with application/x-ndjson content type."""
-    app = create_app()
-
     mock_graph = MagicMock()
     mock_graph.astream = _mock_astream
 
     with patch("app.api.v1.audit.audit_graph", mock_graph):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/v1/audit/run",
-                json=_SAMPLE_AUDIT_PAYLOAD,
-                headers=_HEADERS,
-            )
+        response = await async_client.post(
+            "/api/v1/audit/run",
+            json=_SAMPLE_AUDIT_PAYLOAD,
+            headers=auth_headers,
+        )
 
     assert response.status_code == 200
     assert "ndjson" in response.headers["content-type"]
 
 
 @pytest.mark.asyncio
-async def test_audit_run_emits_node_complete_events():
+async def test_audit_run_emits_node_complete_events(async_client, auth_headers):
     """Each agent node should produce a node_complete NDJSON event."""
-    app = create_app()
-
     mock_graph = MagicMock()
     mock_graph.astream = _mock_astream
 
     with patch("app.api.v1.audit.audit_graph", mock_graph):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/v1/audit/run",
-                json=_SAMPLE_AUDIT_PAYLOAD,
-                headers=_HEADERS,
-            )
+        response = await async_client.post(
+            "/api/v1/audit/run",
+            json=_SAMPLE_AUDIT_PAYLOAD,
+            headers=auth_headers,
+        )
 
     lines = [line for line in response.text.strip().split("\n") if line]
     events = [json.loads(line) for line in lines]
@@ -99,20 +87,17 @@ async def test_audit_run_emits_node_complete_events():
 
 
 @pytest.mark.asyncio
-async def test_audit_run_emits_verdict_event():
+async def test_audit_run_emits_verdict_event(async_client, auth_headers):
     """The last NDJSON line should contain the compliance verdict."""
-    app = create_app()
-
     mock_graph = MagicMock()
     mock_graph.astream = _mock_astream
 
     with patch("app.api.v1.audit.audit_graph", mock_graph):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/v1/audit/run",
-                json=_SAMPLE_AUDIT_PAYLOAD,
-                headers=_HEADERS,
-            )
+        response = await async_client.post(
+            "/api/v1/audit/run",
+            json=_SAMPLE_AUDIT_PAYLOAD,
+            headers=auth_headers,
+        )
 
     lines = [line for line in response.text.strip().split("\n") if line]
     events = [json.loads(line) for line in lines]
@@ -124,20 +109,17 @@ async def test_audit_run_emits_verdict_event():
 
 
 @pytest.mark.asyncio
-async def test_audit_run_progress_increases_monotonically():
+async def test_audit_run_progress_increases_monotonically(async_client, auth_headers):
     """Progress values in node_complete events should increase from 0 to 1."""
-    app = create_app()
-
     mock_graph = MagicMock()
     mock_graph.astream = _mock_astream
 
     with patch("app.api.v1.audit.audit_graph", mock_graph):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/v1/audit/run",
-                json=_SAMPLE_AUDIT_PAYLOAD,
-                headers=_HEADERS,
-            )
+        response = await async_client.post(
+            "/api/v1/audit/run",
+            json=_SAMPLE_AUDIT_PAYLOAD,
+            headers=auth_headers,
+        )
 
     lines = [line for line in response.text.strip().split("\n") if line]
     events = [json.loads(line) for line in lines]
@@ -148,25 +130,21 @@ async def test_audit_run_progress_increases_monotonically():
 
 
 @pytest.mark.asyncio
-async def test_audit_run_missing_api_key():
+async def test_audit_run_missing_api_key(async_client):
     """POST /audit/run without X-API-Key should return 401."""
-    app = create_app()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/v1/audit/run",
-            json=_SAMPLE_AUDIT_PAYLOAD,
-        )
+    response = await async_client.post(
+        "/api/v1/audit/run",
+        json=_SAMPLE_AUDIT_PAYLOAD,
+    )
     assert response.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_audit_run_cached_verdict_returns_200():
+async def test_audit_run_cached_verdict_returns_200(async_client, auth_headers):
     """
     If DynamoDB has a COMPLETE record for run_id, the endpoint should return
     HTTP 200 immediately with the cached verdict without invoking the graph.
     """
-    app = create_app()
-
     mock_dynamo = MagicMock()
     mock_dynamo.get_item.return_value = {
         "Item": {
@@ -182,12 +160,11 @@ async def test_audit_run_cached_verdict_returns_200():
     }
 
     with patch("app.dependencies._get_dynamodb_client", return_value=mock_dynamo):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/v1/audit/run",
-                json=_SAMPLE_AUDIT_PAYLOAD,
-                headers=_HEADERS,
-            )
+        response = await async_client.post(
+            "/api/v1/audit/run",
+            json=_SAMPLE_AUDIT_PAYLOAD,
+            headers=auth_headers,
+        )
 
     assert response.status_code == 200
     body = response.json()
@@ -197,13 +174,11 @@ async def test_audit_run_cached_verdict_returns_200():
 
 
 @pytest.mark.asyncio
-async def test_audit_run_in_progress_returns_409():
+async def test_audit_run_in_progress_returns_409(async_client, auth_headers):
     """
     If DynamoDB has an IN_PROGRESS record for run_id, the endpoint should
     return HTTP 409 Conflict without invoking the graph.
     """
-    app = create_app()
-
     mock_dynamo = MagicMock()
     mock_dynamo.get_item.return_value = {
         "Item": {
@@ -216,12 +191,11 @@ async def test_audit_run_in_progress_returns_409():
     }
 
     with patch("app.dependencies._get_dynamodb_client", return_value=mock_dynamo):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/v1/audit/run",
-                json=_SAMPLE_AUDIT_PAYLOAD,
-                headers=_HEADERS,
-            )
+        response = await async_client.post(
+            "/api/v1/audit/run",
+            json=_SAMPLE_AUDIT_PAYLOAD,
+            headers=auth_headers,
+        )
 
     assert response.status_code == 409
     body = response.json()
@@ -229,38 +203,34 @@ async def test_audit_run_in_progress_returns_409():
 
 
 @pytest.mark.asyncio
-async def test_audit_run_invalid_asset_spec():
+async def test_audit_run_invalid_asset_spec(async_client, auth_headers):
     """QA-5: POST /audit/run with invalid asset_spec should return 422."""
-    app = create_app()
     payload = _SAMPLE_AUDIT_PAYLOAD.copy()
     payload["asset_spec"] = {"invalid": "missing name and category"}
-    
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/v1/audit/run",
-            json=payload,
-            headers=_HEADERS,
-        )
-    
+
+    response = await async_client.post(
+        "/api/v1/audit/run",
+        json=payload,
+        headers=auth_headers,
+    )
+
     assert response.status_code == 422
     body = response.json()
     assert "asset_spec" in str(body["detail"])
 
 
 @pytest.mark.asyncio
-async def test_audit_run_oversized_auditor_remarks():
+async def test_audit_run_oversized_auditor_remarks(async_client, auth_headers):
     """QA-5: POST /audit/run with oversized auditor_remarks should return 422."""
-    app = create_app()
     payload = _SAMPLE_AUDIT_PAYLOAD.copy()
     payload["auditor_remarks"] = "A" * 5001  # Max is 5000
-    
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/v1/audit/run",
-            json=payload,
-            headers=_HEADERS,
-        )
-    
+
+    response = await async_client.post(
+        "/api/v1/audit/run",
+        json=payload,
+        headers=auth_headers,
+    )
+
     assert response.status_code == 422
     body = response.json()
     assert "auditor_remarks" in str(body["detail"])

@@ -23,9 +23,7 @@ def test_serialise_node_complete_event():
 
 
 def test_serialise_verdict_event():
-    event = VerdictEvent(
-        verdict={"compliance_status": "COMPLIANT", "confidence": 0.9}
-    )
+    event = VerdictEvent(verdict={"compliance_status": "COMPLIANT", "confidence": 0.9})
     result = serialise_event(event)
     assert result.endswith("\n")
     data = json.loads(result.strip())

@@ -1,4 +1,9 @@
 <!-- Dashboard View - Asset Compliance AI -->
+<style>
+  .activity-row:hover {
+    background-color: rgba(255, 255, 255, 0.02);
+  }
+</style>
 <div class="page-container">
   <!-- Dashboard Header and Health Telemetry Badge -->
   <div class="flex-row justify-between align-center" style="margin-bottom: 8px;">
@@ -11,7 +16,7 @@
     
     <div class="flex-row align-center" style="gap: 8px;">
       <span class="body-sm" style="color: var(--on-surface-dim);">System API Status:</span>
-      <span id="health-status-badge" class="badge badge-pending">CONNECTING</span>
+      <span id="health-status-badge" class="badge badge-pending" aria-live="polite">CONNECTING</span>
     </div>
   </div>
 

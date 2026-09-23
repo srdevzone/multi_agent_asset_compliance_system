@@ -1,5 +1,4 @@
 // js/pages/admin.js
-import { Config } from '../config.js';
 
 // DOM Elements
 const apiStatusBadge = document.getElementById('api-status-badge');
@@ -51,18 +50,18 @@ let currentActiveAssetId = '';
 // Initialize page
 async function init() {
   // 1. Setup dev mode / default keys
-  await Config.fetchAndSetupDevMode();
+  await window.Config.fetchAndSetupDevMode();
 
   // 2. Load API Key status
   updateApiKeyStatus();
 
   // 3. Load active Asset ID
-  currentActiveAssetId = Config.getCurrentAssetId();
+  currentActiveAssetId = window.Config.getCurrentAssetId();
   targetAssetIdInput.value = currentActiveAssetId;
   activeAssetBadge.textContent = currentActiveAssetId;
 
   // 4. Fetch initial stats
-  if (Config.getApiKey()) {
+  if (window.Config.getApiKey()) {
     await fetchStats(currentActiveAssetId);
   } else {
     window.ApiClient.showToast("API Key is not configured. Please set the key first.", "warning");
@@ -75,14 +74,7 @@ async function init() {
 
 // Update API status display
 function updateApiKeyStatus() {
-  const key = Config.getApiKey();
-  if (key) {
-    apiStatusBadge.textContent = "Configured";
-    apiStatusBadge.className = "badge badge-success";
-  } else {
-    apiStatusBadge.textContent = "Not Configured";
-    apiStatusBadge.className = "badge badge-danger";
-  }
+  window.Utils.renderApiKeyStatus(apiStatusBadge, window.Config.getApiKey());
 }
 
 // Fetch Asset Statistics
@@ -99,7 +91,7 @@ async function fetchStats(assetId) {
     const res = await window.ApiClient.getAssetStats(assetId);
     
     // Save as current globally active asset if successful
-    Config.setCurrentAssetId(assetId);
+    window.Config.setCurrentAssetId(assetId);
     currentActiveAssetId = assetId;
     activeAssetBadge.textContent = assetId;
     targetAssetIdInput.value = assetId;
@@ -193,15 +185,13 @@ function setupEventListeners() {
 
   // API Key modal open/close
   configureApiKeyBtn.addEventListener('click', () => {
-    apiKeyInput.value = Config.getApiKey();
-    apiKeyModal.classList.add('open');
+    apiKeyInput.value = window.Config.getApiKey();
   });
-
-  const closeApiKeyModal = () => {
-    apiKeyModal.classList.remove('open');
-  };
-  closeApiKeyBtn.addEventListener('click', closeApiKeyModal);
-  cancelApiKeyBtn.addEventListener('click', closeApiKeyModal);
+  const { closeModal: closeApiKeyModal } = window.Modal.bindStandardModal(
+    'api-key-modal',
+    [configureApiKeyBtn],
+    [closeApiKeyBtn, cancelApiKeyBtn]
+  );
 
   // Save API Key
   saveApiKeyBtn.addEventListener('click', async () => {
@@ -217,7 +207,7 @@ function setupEventListeners() {
     try {
       const res = await window.ApiClient.verifyApiKey(key);
       if (res.valid) {
-        Config.setApiKey(key);
+        window.Config.setApiKey(key);
         updateApiKeyStatus();
         window.ApiClient.showToast("API Key verified and updated successfully!", "success");
         closeApiKeyModal();
@@ -236,7 +226,7 @@ function setupEventListeners() {
 
   // GDPR Delete open modal
   deleteAssetBtn.addEventListener('click', () => {
-    if (!Config.getApiKey()) {
+    if (!window.Config.getApiKey()) {
       window.ApiClient.showToast("API Key is missing. Configure it first.", "warning");
       apiKeyModal.classList.add('open');
       return;
@@ -248,11 +238,11 @@ function setupEventListeners() {
     erasureModal.classList.add('open');
   });
 
-  const closeErasureModal = () => {
-    erasureModal.classList.remove('open');
-  };
-  closeErasureBtn.addEventListener('click', closeErasureModal);
-  cancelErasureBtn.addEventListener('click', closeErasureModal);
+  const { closeModal: closeErasureModal } = window.Modal.bindStandardModal(
+    'erasure-modal',
+    [],
+    [closeErasureBtn, cancelErasureBtn]
+  );
 
   // Add validation listeners for GDPR deletion steps
   checkVectorDeletion.addEventListener('change', validateErasureConfirmation);

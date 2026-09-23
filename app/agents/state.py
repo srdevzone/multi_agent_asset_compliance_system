@@ -15,15 +15,19 @@ Field groups:
     so the graph always completes and returns a partial verdict
 """
 
-import html
 import operator
 from typing import Annotated, Any, TypedDict, cast
 
 from app.schemas.audit import AssetSpec
+from app.utils.sanitization import escape_dict
 
 
 class ImageAnalysis(TypedDict):
-    """Structured result of LLM vision analysis for one audit photo."""
+    """Structured result of LLM vision analysis for one audit photo.
+
+    Mirrors ``app.schemas.image.ImageAnalysis`` but remains a TypedDict so it
+    can be stored directly in the LangGraph state dictionary.
+    """
 
     s3_key: str
     findings: list[str]  # Specific observations about defects or non-compliance
@@ -73,27 +77,14 @@ class AuditState(TypedDict, total=False):
 
     # ── evidence_agent output ─────────────────────────────────────────────────
     evidence_bundle: list[dict[str, Any]]
+    evidence_truncated: bool  # True if evidence was truncated due to cap
+    evidence_original_count: int  # Original count before truncation
 
     # ── verdict_agent output ──────────────────────────────────────────────────
     verdict: dict[str, Any] | None
 
     # ── Error accumulator — non-fatal errors from any agent ──────────────────
     errors: Annotated[list[str], operator.add]
-
-
-def _escape_dict(d: dict[str, Any]) -> dict[str, Any]:
-    """Recursively HTML-escape string values in a dictionary to prevent prompt injection (SEC-2)."""
-    result: dict[str, Any] = {}
-    for k, v in d.items():
-        if isinstance(v, str):
-            result[k] = html.escape(v)
-        elif isinstance(v, dict):
-            result[k] = _escape_dict(v)
-        elif isinstance(v, list):
-            result[k] = [html.escape(item) if isinstance(item, str) else item for item in v]
-        else:
-            result[k] = v
-    return result
 
 
 def get_asset_spec_dict(state: Any) -> dict[str, Any]:
@@ -112,7 +103,7 @@ def get_asset_spec_dict(state: Any) -> dict[str, Any]:
     if not spec:
         return {}
     if isinstance(spec, dict):
-        return _escape_dict(spec)
+        return escape_dict(spec)
     if hasattr(spec, "model_dump"):
-        return _escape_dict(cast(dict[str, Any], spec.model_dump()))
+        return escape_dict(cast(dict[str, Any], spec.model_dump()))
     return {}

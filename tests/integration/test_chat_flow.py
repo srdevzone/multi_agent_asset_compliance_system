@@ -10,12 +10,8 @@ Tests all three retrieval tiers:
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
 
-from app.main import create_app
-
-_API_KEY = "test-secret-key-minimum-32-chars-long"
-_HEADERS = {"X-API-Key": _API_KEY}
+from tests.integration.helpers import patch_dependencies
 
 _CHAT_PAYLOAD = {
     "asset_id": "abc-123",
@@ -48,25 +44,23 @@ class MockMessage:
 
 
 @pytest.mark.asyncio
-async def test_chat_pinecone_rag_tier(mock_pinecone_index, mock_embeddings_model, mock_chat_model):
+async def test_chat_pinecone_rag_tier(
+    async_client, auth_headers, mock_pinecone_index, mock_embeddings_model, mock_chat_model
+):
     """When Pinecone score >= 0.75, response should use pinecone_rag search path."""
     mock_pinecone_index.query.return_value = MagicMock(matches=[_make_pinecone_match(0.92)])
     mock_chat_model.ainvoke = AsyncMock(
         return_value=MockMessage("The maximum operating pressure is 150 PSI.")
     )
 
-    app = create_app()
-    with (
-        patch("app.dependencies._get_pinecone_index", return_value=mock_pinecone_index),
-        patch("app.dependencies._get_embeddings_model", return_value=mock_embeddings_model),
-        patch("app.dependencies._get_agent_llm", return_value=mock_chat_model),
+    with patch_dependencies(
+        pinecone=mock_pinecone_index, embeddings=mock_embeddings_model, llm=mock_chat_model
     ):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/v1/chat/query",
-                json=_CHAT_PAYLOAD,
-                headers=_HEADERS,
-            )
+        response = await async_client.post(
+            "/api/v1/chat/query",
+            json=_CHAT_PAYLOAD,
+            headers=auth_headers,
+        )
 
     assert response.status_code == 200
     body = response.json()
@@ -78,7 +72,12 @@ async def test_chat_pinecone_rag_tier(mock_pinecone_index, mock_embeddings_model
 
 @pytest.mark.asyncio
 async def test_chat_asset_spec_fallback_tier(
-    mock_pinecone_index, mock_embeddings_model, mock_chat_model, mock_tavily_client
+    async_client,
+    auth_headers,
+    mock_pinecone_index,
+    mock_embeddings_model,
+    mock_chat_model,
+    mock_tavily_client,
 ):
     """When Pinecone score < 0.75 and Tavily returns no results, use asset_spec path."""
     # Low score — will trigger fallback
@@ -87,19 +86,17 @@ async def test_chat_asset_spec_fallback_tier(
         return_value=MockMessage("Based on the asset spec, the pump is a HydroTech HP-5000.")
     )
 
-    app = create_app()
     with (
-        patch("app.dependencies._get_pinecone_index", return_value=mock_pinecone_index),
-        patch("app.dependencies._get_embeddings_model", return_value=mock_embeddings_model),
-        patch("app.dependencies._get_agent_llm", return_value=mock_chat_model),
+        patch_dependencies(
+            pinecone=mock_pinecone_index, embeddings=mock_embeddings_model, llm=mock_chat_model
+        ),
         patch("app.services.web_search_service.search", return_value=[]),
     ):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/v1/chat/query",
-                json=_CHAT_PAYLOAD,
-                headers=_HEADERS,
-            )
+        response = await async_client.post(
+            "/api/v1/chat/query",
+            json=_CHAT_PAYLOAD,
+            headers=auth_headers,
+        )
 
     assert response.status_code == 200
     body = response.json()
@@ -108,7 +105,9 @@ async def test_chat_asset_spec_fallback_tier(
 
 
 @pytest.mark.asyncio
-async def test_chat_web_search_tier(mock_pinecone_index, mock_embeddings_model, mock_chat_model):
+async def test_chat_web_search_tier(
+    async_client, auth_headers, mock_pinecone_index, mock_embeddings_model, mock_chat_model
+):
     """When Pinecone scores < 0.75 and Tavily returns results, use web_search path."""
     mock_pinecone_index.query.return_value = MagicMock(matches=[])  # No results
 
@@ -125,19 +124,17 @@ async def test_chat_web_search_tier(mock_pinecone_index, mock_embeddings_model, 
         }
     ]
 
-    app = create_app()
     with (
-        patch("app.dependencies._get_pinecone_index", return_value=mock_pinecone_index),
-        patch("app.dependencies._get_embeddings_model", return_value=mock_embeddings_model),
-        patch("app.dependencies._get_agent_llm", return_value=mock_chat_model),
+        patch_dependencies(
+            pinecone=mock_pinecone_index, embeddings=mock_embeddings_model, llm=mock_chat_model
+        ),
         patch("app.services.web_search_service.search", return_value=web_results),
     ):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/v1/chat/query",
-                json=_CHAT_PAYLOAD,
-                headers=_HEADERS,
-            )
+        response = await async_client.post(
+            "/api/v1/chat/query",
+            json=_CHAT_PAYLOAD,
+            headers=auth_headers,
+        )
 
     assert response.status_code == 200
     body = response.json()
@@ -147,7 +144,7 @@ async def test_chat_web_search_tier(mock_pinecone_index, mock_embeddings_model, 
 
 @pytest.mark.asyncio
 async def test_chat_with_doc_type_filter(
-    mock_pinecone_index, mock_embeddings_model, mock_chat_model
+    async_client, auth_headers, mock_pinecone_index, mock_embeddings_model, mock_chat_model
 ):
     """chat with doc_type_filter should pass filter to Pinecone query."""
     mock_pinecone_index.query.return_value = MagicMock(matches=[_make_pinecone_match(0.85)])
@@ -157,18 +154,14 @@ async def test_chat_with_doc_type_filter(
 
     payload = {**_CHAT_PAYLOAD, "doc_type_filter": "safety_sheet"}
 
-    app = create_app()
-    with (
-        patch("app.dependencies._get_pinecone_index", return_value=mock_pinecone_index),
-        patch("app.dependencies._get_embeddings_model", return_value=mock_embeddings_model),
-        patch("app.dependencies._get_agent_llm", return_value=mock_chat_model),
+    with patch_dependencies(
+        pinecone=mock_pinecone_index, embeddings=mock_embeddings_model, llm=mock_chat_model
     ):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/v1/chat/query",
-                json=payload,
-                headers=_HEADERS,
-            )
+        response = await async_client.post(
+            "/api/v1/chat/query",
+            json=payload,
+            headers=auth_headers,
+        )
 
     assert response.status_code == 200
     # Verify the filter was passed to Pinecone
@@ -178,7 +171,7 @@ async def test_chat_with_doc_type_filter(
 
 @pytest.mark.asyncio
 async def test_chat_history_overflow_rejected(
-    mock_pinecone_index, mock_embeddings_model, mock_chat_model
+    async_client, auth_headers, mock_pinecone_index, mock_embeddings_model, mock_chat_model
 ):
     """POST /chat/query with >50 conversation history messages should return 422 validation error."""
     # 51 messages
@@ -188,18 +181,14 @@ async def test_chat_history_overflow_rejected(
     ]
     payload = {**_CHAT_PAYLOAD, "conversation_history": history}
 
-    app = create_app()
-    with (
-        patch("app.dependencies._get_pinecone_index", return_value=mock_pinecone_index),
-        patch("app.dependencies._get_embeddings_model", return_value=mock_embeddings_model),
-        patch("app.dependencies._get_agent_llm", return_value=mock_chat_model),
+    with patch_dependencies(
+        pinecone=mock_pinecone_index, embeddings=mock_embeddings_model, llm=mock_chat_model
     ):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/v1/chat/query",
-                json=payload,
-                headers=_HEADERS,
-            )
+        response = await async_client.post(
+            "/api/v1/chat/query",
+            json=payload,
+            headers=auth_headers,
+        )
 
     assert response.status_code == 422
     body = response.json()

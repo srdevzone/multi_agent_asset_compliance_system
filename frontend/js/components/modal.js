@@ -1,6 +1,16 @@
 /* Modal Component - Asset Compliance AI */
 
 (function () {
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
   class ModalManager {
     constructor() {
       // Configuration
@@ -10,7 +20,7 @@
      * Create and display a modal overlay
      * @param {object} params Modal configuration params
      * @param {string} params.title Title string
-     * @param {string} params.content Body content HTML or text
+     * @param {string} params.content Body content HTML or text (callers must sanitize user data)
      * @param {string} params.confirmText Confirm button text
      * @param {string} params.cancelText Cancel button text
      * @param {function} params.onConfirm Callback on confirm click (passes close helper)
@@ -29,6 +39,8 @@
     }) {
       // Create modal backdrop container
       const backdrop = document.createElement('div');
+      backdrop.setAttribute('role', 'dialog');
+      backdrop.setAttribute('aria-modal', 'true');
       Object.assign(backdrop.style, {
         position: 'fixed',
         top: '0',
@@ -65,10 +77,13 @@
       if (variant === 'danger') confirmBtnClass = 'btn-danger';
       if (variant === 'warning') confirmBtnClass = 'btn-warning';
 
+      const titleId = `modal-title-${Date.now()}`;
+      backdrop.setAttribute('aria-labelledby', titleId);
+
       modal.innerHTML = `
         <div class="card-header" style="border-bottom: 1px solid var(--slate-700); margin-bottom: 16px; padding-bottom: 12px;">
-          <h3 class="card-title" style="font-family: var(--font-headings); font-size: var(--fs-headline-sm); font-weight: var(--fw-headline-sm); color: var(--on-surface);">${title}</h3>
-          <button class="modal-close-btn" style="
+          <h3 class="card-title modal-title" id="${titleId}" style="font-family: var(--font-headings); font-size: var(--fs-headline-sm); font-weight: var(--fw-headline-sm); color: var(--on-surface);"></h3>
+          <button class="modal-close-btn" aria-label="Close" style="
             background: none;
             border: none;
             color: var(--on-surface-variant);
@@ -78,14 +93,19 @@
             padding: 0 4px;
           ">&times;</button>
         </div>
-        <div class="card-body" style="color: var(--on-surface-variant); margin-bottom: 24px; font-family: var(--font-body); font-size: var(--fs-body-md); line-height: 1.5;">
-          ${content}
+        <div class="card-body modal-content" style="color: var(--on-surface-variant); margin-bottom: 24px; font-family: var(--font-body); font-size: var(--fs-body-md); line-height: 1.5;">
         </div>
         <div class="card-footer" style="border-top: none; padding-top: 0; display: flex; justify-content: flex-end; gap: 12px; margin-top: 0;">
-          <button class="btn btn-secondary modal-cancel-btn">${cancelText}</button>
-          <button class="btn ${confirmBtnClass} modal-confirm-btn">${confirmText}</button>
+          <button class="btn btn-secondary modal-cancel-btn"></button>
+          <button class="btn ${confirmBtnClass} modal-confirm-btn"></button>
         </div>
       `;
+
+      // Set values safely using textContent
+      modal.querySelector('.modal-title').textContent = escapeHtml(title);
+      modal.querySelector('.modal-content').innerHTML = content; // Callers must sanitize
+      modal.querySelector('.modal-cancel-btn').textContent = cancelText;
+      modal.querySelector('.modal-confirm-btn').textContent = confirmText;
 
       backdrop.appendChild(modal);
       document.body.appendChild(backdrop);
@@ -112,32 +132,32 @@
       const confirmBtn = modal.querySelector('.modal-confirm-btn');
       const closeBtn = modal.querySelector('.modal-close-btn');
 
-      cancelBtn.onclick = () => {
+      cancelBtn.addEventListener('click', () => {
         if (onCancel) {
           onCancel(close);
         } else {
           close();
         }
-      };
+      });
 
-      confirmBtn.onclick = () => {
+      confirmBtn.addEventListener('click', () => {
         if (onConfirm) {
           onConfirm(close);
         } else {
           close();
         }
-      };
+      });
 
-      closeBtn.onclick = () => {
+      closeBtn.addEventListener('click', () => {
         close();
-      };
+      });
 
       // Close modal on click of outside wrapper
-      backdrop.onclick = (e) => {
+      backdrop.addEventListener('click', (e) => {
         if (e.target === backdrop) {
           close();
         }
-      };
+      });
 
       // Accessible ESC key dismiss handler
       const keyHandler = (e) => {
@@ -153,4 +173,26 @@
   }
 
   window.Modal = new ModalManager();
+
+  /**
+   * Bind standard open/close modal triggers.
+   * @param {string} modalId - DOM id of the modal element
+   * @param {Array<HTMLElement>} openTriggers - elements that open the modal
+   * @param {Array<HTMLElement>} closeTriggers - elements that close the modal
+   * @returns {{modal: HTMLElement, closeModal: Function}}
+   */
+  window.Modal.bindStandardModal = function (modalId, openTriggers, closeTriggers) {
+    const modal = document.getElementById(modalId);
+    const closeModal = () => modal.classList.remove('open');
+
+    openTriggers.forEach(trigger => {
+      trigger.addEventListener('click', () => modal.classList.add('open'));
+    });
+
+    closeTriggers.forEach(trigger => {
+      trigger.addEventListener('click', closeModal);
+    });
+
+    return { modal, closeModal };
+  };
 })();

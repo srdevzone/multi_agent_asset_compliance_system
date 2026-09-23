@@ -203,7 +203,8 @@
           <h2 class="headline-sm">Asset Database & Vector Statistics</h2>
           
           <div style="display: flex; gap: 8px;">
-            <input type="text" id="target-asset-id" class="form-control" style="width: 180px; padding: 6px 12px;" placeholder="Asset ID...">
+            <label for="target-asset-id" class="sr-only">Asset ID</label>
+            <input type="text" id="target-asset-id" class="form-control" style="width: 180px; padding: 6px 12px;" placeholder="Asset ID..." aria-label="Asset ID">
             <button class="btn btn-primary" id="fetch-stats-btn" style="padding: 6px 16px;">Refresh</button>
           </div>
         </div>
@@ -308,11 +309,11 @@
 </div>
 
 <!-- API Key Configuration Modal -->
-<div class="modal-overlay" id="api-key-modal">
+<div class="modal-overlay" id="api-key-modal" role="dialog" aria-modal="true" aria-labelledby="admin-api-key-modal-title">
   <div class="modal">
     <div class="modal-header">
-      <h3 class="modal-title headline-sm">Configure API Key</h3>
-      <button class="modal-close" id="close-api-modal-btn">&times;</button>
+      <h3 class="modal-title headline-sm" id="admin-api-key-modal-title">Configure API Key</h3>
+      <button class="modal-close" id="close-api-modal-btn" aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
       <p class="body-sm" style="color: var(--on-surface-variant); margin-bottom: 16px;">
@@ -331,13 +332,13 @@
 </div>
 
 <!-- GDPR Erasure Triple Confirmation Modal -->
-<div class="modal-overlay" id="erasure-modal">
+<div class="modal-overlay" id="erasure-modal" role="dialog" aria-modal="true" aria-labelledby="erasure-modal-title">
   <div class="modal" style="max-width: 550px; border: 1px solid var(--rose-error);">
     <div class="modal-header" style="border-bottom: 1px solid rgba(244, 63, 94, 0.2); padding-bottom: 12px;">
-      <h3 class="modal-title headline-sm" style="color: var(--rose-error); display: flex; align-items: center; gap: 8px;">
+      <h3 class="modal-title headline-sm" id="erasure-modal-title" style="color: var(--rose-error); display: flex; align-items: center; gap: 8px;">
         🛑 GDPR Right-to-Erasure Request
       </h3>
-      <button class="modal-close" id="close-erasure-modal-btn">&times;</button>
+      <button class="modal-close" id="close-erasure-modal-btn" aria-label="Close">&times;</button>
     </div>
     <div class="modal-body" style="padding-top: 16px;">
       <p class="body-md" style="margin-bottom: 16px; font-weight: 500;">
@@ -367,7 +368,8 @@
         <label class="form-label" id="confirm-input-label" style="font-weight: 600;">
           To confirm erasure, type the Asset ID "<span id="expected-asset-id-text" style="font-family: var(--font-code); color: #ffffff;">sample-pump-001</span>" below:
         </label>
-        <input type="text" id="confirm-asset-id-input" class="form-control" placeholder="Type Asset ID exactly..." autocomplete="off">
+        <label for="confirm-asset-id-input" class="sr-only">Confirm Asset ID for erasure</label>
+        <input type="text" id="confirm-asset-id-input" class="form-control" placeholder="Type Asset ID exactly..." autocomplete="off" aria-describedby="confirm-input-label">
         <div id="confirmation-mismatch" style="color: var(--rose-error); font-size: 12px; margin-top: 4px; display: none;">Asset ID does not match.</div>
       </div>
     </div>

@@ -11,8 +11,9 @@
       this.submitBtn = document.getElementById('login-submit-btn');
       this.alertContainer = document.getElementById('login-alert-container');
       
+      this._boundHandleLogin = this.handleLogin.bind(this);
       if (this.loginForm) {
-        this.loginForm.addEventListener('submit', this.handleLogin.bind(this));
+        this.loginForm.addEventListener('submit', this._boundHandleLogin);
       }
 
       this.checkDevMode();
@@ -130,8 +131,8 @@
 
     destroy() {
       console.log('Login controller destroyed');
-      if (this.loginForm) {
-        this.loginForm.removeEventListener('submit', this.handleLogin.bind(this));
+      if (this.loginForm && this._boundHandleLogin) {
+        this.loginForm.removeEventListener('submit', this._boundHandleLogin);
       }
     }
   };

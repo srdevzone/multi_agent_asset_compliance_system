@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.schemas.audit import AssetSpec
+from app.schemas.common import AssetId
 
 
 class Message(BaseModel):
@@ -31,8 +32,9 @@ class SourceCitation(BaseModel):
 class ChatRequest(BaseModel):
     """Request body for POST /api/v1/chat/query."""
 
-    asset_id: str = Field(..., min_length=1)
+    asset_id: AssetId
     asset_spec: AssetSpec = Field(..., description="Asset metadata from backend client")
+
     question: str = Field(..., min_length=1, max_length=2000)
     conversation_history: list[Message] = Field(
         default_factory=list,
@@ -46,13 +48,16 @@ class ChatRequest(BaseModel):
         default=None,
         description="Recent audit verdicts — enables questions about past audit findings",
     )
-    doc_type_filter: Literal[
-        "user_manual",
-        "safety_sheet",
-        "compliance_spec",
-        "installation_image",
-        "other",
-    ] | None = Field(
+    doc_type_filter: (
+        Literal[
+            "user_manual",
+            "safety_sheet",
+            "compliance_spec",
+            "installation_image",
+            "other",
+        ]
+        | None
+    ) = Field(
         default=None,
         description=(
             "Optional: restrict RAG retrieval to one doc_type. "
@@ -65,7 +70,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """Response body for POST /api/v1/chat/query."""
 
-    asset_id: str
+    asset_id: AssetId
     answer: str
     sources: list[SourceCitation] = Field(
         default_factory=list,

@@ -78,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Validate Pinecone index dimension at cold start
     try:
         from app.dependencies import _get_pinecone_index
+
         index = _get_pinecone_index()
         stats = index.describe_index_stats()
         dimension = getattr(stats, "dimension", None)
@@ -139,9 +140,33 @@ def create_app() -> FastAPI:
         asset_compliance_exception_handler,  # type: ignore[arg-type]
     )
 
+    # ── Content Security Policy middleware ──────────────────────────────────────
+    @app.middleware("http")
+    async def security_headers_middleware(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        """Add security headers including CSP to all responses."""
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'"
+        )
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        return response
+
     # ── Correlation ID middleware ──────────────────────────────────────────────
     @app.middleware("http")
-    async def request_id_middleware(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    async def request_id_middleware(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         """
         Extract X-Request-ID header or generate a new UUID.
         Bind it to structlog contextvars so all logs in this request share it.
@@ -149,7 +174,7 @@ def create_app() -> FastAPI:
         structlog.contextvars.clear_contextvars()
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
         structlog.contextvars.bind_contextvars(request_id=request_id)
-        
+
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response
@@ -165,14 +190,23 @@ def create_app() -> FastAPI:
         This key is shared with the enterprise asset management system.
         """
         # Bypass API key check for non-api routes (e.g. static assets) and public paths
-        if (
-            request.url.path in _PUBLIC_PATHS
-            or not request.url.path.startswith("/api/v1/")
-        ):
+        if request.url.path in _PUBLIC_PATHS or not request.url.path.startswith("/api/v1/"):
             return await call_next(request)
 
         provided_key = request.headers.get("X-API-Key", "")
-        expected_key = settings.api_secret_key.get_secret_value()
+        expected_key = settings.api_secret_key.get_secret_value() if settings.api_secret_key else ""
+
+        if not expected_key:
+            logger.warning("api_key_not_configured", path=request.url.path)
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "error": {
+                        "code": "NOT_CONFIGURED",
+                        "message": "API secret key is not configured on the server.",
+                    }
+                },
+            )
 
         # Both strings must be encoded for compare_digest
         if not hmac.compare_digest(

@@ -51,12 +51,12 @@ async def get_asset_stats(
 
     # ── Pinecone namespace stats ───────────────────────────────────────────────
     stats = index.describe_index_stats()
-    namespace_key = f"asset_{asset_id}"
+    namespace_key = pinecone_service.namespace_for(asset_id)
     ns = stats.namespaces.get(namespace_key)
     vector_count = getattr(ns, "vector_count", 0) if ns else 0
 
     # ── DynamoDB audit run summary ─────────────────────────────────────────────
-    run_summary = dynamodb_service.get_asset_run_summary(
+    run_summary = await dynamodb_service.get_asset_run_summary(
         dynamodb_client,
         settings.dynamodb_audit_table,
         asset_id,
@@ -101,22 +101,53 @@ async def delete_asset(
     log = logger.bind(asset_id=asset_id)
     log.warning("admin_asset_erasure_initiated", asset_id=asset_id)
 
-    # ── Delete S3 objects ──────────────────────────────────────────────────────
-    s3_deleted = await s3_service.delete_asset_documents(
-        s3_client,
-        settings.s3_bucket_name,
-        asset_id,
-    )
+    s3_deleted = 0
+    vectors_deleted = 0
+    runs_erased = 0
+    pinecone_done = False
+    dynamodb_done = False
 
-    # ── Delete Pinecone vectors ────────────────────────────────────────────────
-    vectors_deleted = pinecone_service.delete_namespace(index, asset_id)
+    try:
+        # ── Delete S3 objects ──────────────────────────────────────────────
+        s3_deleted = await s3_service.delete_asset_documents(
+            s3_client,
+            settings.s3_bucket_name,
+            asset_id,
+        )
 
-    # ── Erase DynamoDB audit run records ──────────────────────────────────────
-    runs_erased = dynamodb_service.erase_asset_runs(
-        dynamodb_client,
-        settings.dynamodb_audit_table,
-        asset_id,
-    )
+        # ── Delete Pinecone vectors ────────────────────────────────────────
+        vectors_deleted = pinecone_service.delete_namespace(index, asset_id)
+        pinecone_done = True
+
+        # ── Erase DynamoDB audit run records ──────────────────────────────
+        runs_erased = await dynamodb_service.erase_asset_runs(
+            dynamodb_client,
+            settings.dynamodb_audit_table,
+            asset_id,
+        )
+        dynamodb_done = True
+
+    except Exception as exc:
+        log.error(
+            "admin_asset_erasure_partial_failure",
+            s3_deleted=s3_deleted,
+            pinecone_done=pinecone_done,
+            dynamodb_done=dynamodb_done,
+            error=type(exc).__name__,
+        )
+        # Compensation: if S3 deletion succeeded but downstream steps failed,
+        # log the inconsistency for manual reconciliation. S3 objects are the
+        # source of truth and can be re-processed.
+        if s3_deleted > 0 and (not pinecone_done or not dynamodb_done):
+            log.critical(
+                "admin_asset_erasure_compensation_needed",
+                message=(
+                    f"S3 objects were deleted ({s3_deleted}) but downstream "
+                    f"stores were not fully erased (pinecone={pinecone_done}, "
+                    f"dynamodb={dynamodb_done}). Manual reconciliation required."
+                ),
+            )
+        raise
 
     log.warning(
         "admin_asset_erasure_complete",

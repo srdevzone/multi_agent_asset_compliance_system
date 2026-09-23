@@ -34,6 +34,11 @@ Parameters:
     Default: 0.0.0.0/0
     Description: Allowed CIDR block for SSH access (e.g. 203.0.113.5/32).
 
+  ACMCertificateArn:
+    Type: String
+    Description: ARN of the ACM certificate for HTTPS. Required for production deployments.
+    Default: ""
+
   GitRepositoryUrl:
     Type: String
     Default: "https://github.com/chiku-tech/multi_agent_asset_compliance_system.git"
@@ -54,6 +59,7 @@ Parameters:
 
 Conditions:
   HasKeyName: !Not [!Equals [!Ref KeyName, ""]]
+  HasCertificate: !Not [!Equals [!Ref ACMCertificateArn, ""]]
 
 Resources:
 
@@ -81,8 +87,8 @@ Resources:
                   - s3:GetObject
                   - s3:ListBucket
                 Resource:
-                  - !Sub "arn:aws:aws:s3:::${AssetDocsBucketName}"
-                  - !Sub "arn:aws:aws:s3:::${AssetDocsBucketName}/*"
+                  - !Sub "arn:aws:s3:::${AssetDocsBucketName}"
+                  - !Sub "arn:aws:s3:::${AssetDocsBucketName}/*"
         - PolicyName: DynamoDBCrudAccess
           PolicyDocument:
             Version: "2012-10-17"
@@ -96,8 +102,8 @@ Resources:
                   - dynamodb:Query
                   - dynamodb:Scan
                 Resource:
-                  - !Sub "arn:aws:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AuditRunsTableName}"
-                  - !Sub "arn:aws:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AuditRunsTableName}/index/*"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AuditRunsTableName}"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AuditRunsTableName}/index/*"
         - PolicyName: SSMParameterReadAccess
           PolicyDocument:
             Version: "2012-10-17"
@@ -108,7 +114,7 @@ Resources:
                   - ssm:GetParameters
                   - ssm:GetParametersByPath
                 Resource:
-                  - !Sub "arn:aws:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/asset-compliance/${AppEnv}/*"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/asset-compliance/${AppEnv}/*"
 
   EC2InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -127,6 +133,11 @@ Resources:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
+          CidrIp: 0.0.0.0/0
+        # HTTPS access on Port 443 (routed to port 8000 container)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
           CidrIp: 0.0.0.0/0
         # Optional SSH access
         - IpProtocol: tcp
@@ -201,6 +212,37 @@ Resources:
             -p 80:8000 \
             --env-file .env \
             asset-compliance-app:latest
+
+          # Install nginx for TLS termination if certificate is provided
+          if [ -n "${ACMCertificateArn}" ]; then
+            dnf install -y nginx
+            # Configure nginx as TLS reverse proxy
+            cat > /etc/nginx/conf.d/asset-compliance.conf << 'NGINX_CONF'
+server {
+    listen 443 ssl;
+    server_name _;
+
+    ssl_certificate /etc/ssl/certs/server.crt;
+    ssl_certificate_key /etc/ssl/private/server.key;
+
+    location / {
+        proxy_pass http://localhost:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+server {
+    listen 80;
+    server_name _;
+    return 301 https://$host$request_uri;
+}
+NGINX_CONF
+            systemctl start nginx
+            systemctl enable nginx
+          fi
 
           echo "Bootstrap completed successfully."
 

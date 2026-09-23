@@ -197,13 +197,15 @@
 }
 
 /* Badge Variants */
-.badge-compliant {
+.badge-compliant,
+.badge-success {
   background-color: rgba(16, 185, 129, 0.1);
   color: var(--emerald-success);
   border-color: rgba(16, 185, 129, 0.2);
 }
 
-.badge-non-compliant {
+.badge-non-compliant,
+.badge-danger {
   background-color: rgba(244, 63, 94, 0.1);
   color: var(--rose-error);
   border-color: rgba(244, 63, 94, 0.2);
@@ -221,6 +223,12 @@
   background-color: rgba(71, 85, 105, 0.1);
   color: var(--on-surface-variant);
   border-color: rgba(71, 85, 105, 0.2);
+}
+
+.badge-info {
+  background-color: rgba(37, 99, 235, 0.1);
+  color: #60a5fa;
+  border-color: rgba(37, 99, 235, 0.2);
 }
 
 /* Alert Banners */

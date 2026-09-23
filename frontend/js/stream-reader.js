@@ -1,6 +1,6 @@
 // js/stream-reader.js
 
-export const StreamReader = {
+const StreamReader = {
   /**
    * Reads a ReadableStream from a Fetch Response and parses it as NDJSON.
    * @param {Response} response - The fetch Response object containing the body stream.
@@ -95,4 +95,3 @@ export const StreamReader = {
 
 // Expose to window for vanilla JS access
 window.StreamReader = StreamReader;
-export default StreamReader;

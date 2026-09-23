@@ -7,6 +7,23 @@ FastAPI's Depends() system injects them cleanly into route handlers.
 
 Pattern: private `_get_*` functions are cached at the module level;
 public `get_*` wrappers are the FastAPI Depends targets.
+
+Provider resolution
+-------------------
+
+The chat-model factory routes to the correct backend based on the
+configured provider string:
+
+- ``openrouter`` — OpenAI-compatible ``ChatOpenAI`` against the OpenRouter gateway
+- ``zen`` — OpenAI-compatible ``ChatOpenAI`` against the OpenCode Zen gateway
+- ``opencode_go`` — OpenAI-compatible ``ChatOpenAI`` against the OpenCode Go gateway
+- ``xai`` / ``grok`` — Native ``ChatXAI`` against xAI
+- ``local`` — ``LocalChatModel`` returning canned responses (offline dev only)
+- anything else — falls through to ``init_chat_model`` for native LangChain routing
+
+The embeddings factory adds a ``local`` branch that returns a
+:class:`LocalEmbeddings` instance, and keeps the existing
+``init_embeddings`` behaviour for ``openai``/``anthropic``/``google_genai``.
 """
 
 from functools import lru_cache
@@ -24,9 +41,31 @@ from pinecone import Index, Pinecone
 from pydantic import SecretStr
 
 from app.config import Settings, get_settings
-from app.utils.offline_clients import LocalDynamoDBClient, LocalPineconeIndex, LocalS3Client
+from app.utils.offline_clients import (
+    LocalChatModel,
+    LocalDynamoDBClient,
+    LocalEmbeddings,
+    LocalPineconeIndex,
+    LocalS3Client,
+)
 
 logger = structlog.get_logger(__name__)
+
+# OpenCode Zen is an OpenAI-compatible chat gateway. The base URL is a
+# compile-time constant (NOT configurable via env var) to prevent SSRF.
+ZEN_BASE_URL: str = "https://opencode.ai/zen/v1"
+
+# OpenCode Go is the lower-cost subscription gateway. Same security posture.
+OPENCODE_GO_BASE_URL: str = "https://opencode.ai/zen/go/v1"
+
+# OpenRouter gateway base URL (pinned to keep parity with the existing
+# implementation — moving it to config is out of scope for this blueprint).
+OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+
+# Maximum supported embedding vector dimension. Must stay in sync with
+# the validation in ``LocalEmbeddings`` and ``Settings.embedding_dimensions``.
+_MAX_EMBEDDING_DIMENSIONS: int = 8192
+_MIN_EMBEDDING_DIMENSIONS: int = 1
 
 
 # ── Singleton client factories ─────────────────────────────────────────────
@@ -45,56 +84,152 @@ def _get_pinecone_index() -> Index:
     return index
 
 
-def _get_api_key(provider: str, settings: Settings) -> str | None:
+def _get_api_key(provider: str, settings: Settings) -> SecretStr | None:
+    """Resolve the API key for a given provider from the settings store.
+
+    Returns ``None`` if the provider has no key configured. Returning
+    ``None`` (rather than raising) lets the downstream LLM initialiser
+    decide whether to fail or fall back to environment variables — this
+    matches the behaviour expected by the existing fallback path in
+    :func:`_get_agent_llm`.
+
+    Provider keys handled:
+
+    - ``anthropic`` → ``Settings.anthropic_api_key``
+    - ``openai`` → ``Settings.openai_api_key``
+    - ``google_genai`` → ``Settings.google_api_key``
+    - ``xai`` / ``grok`` → ``Settings.xai_api_key``
+    - ``openrouter`` → ``Settings.openrouter_api_key``
+    - ``zen`` → ``Settings.zen_api_key`` (new)
+    - ``opencode_go`` → ``Settings.opencode_go_api_key`` (new)
+    - ``local`` → ``None`` (no remote call is made)
+    """
     if provider == "anthropic" and settings.anthropic_api_key:
-        return settings.anthropic_api_key.get_secret_value()
+        return settings.anthropic_api_key
     if provider == "openai" and settings.openai_api_key:
-        return settings.openai_api_key.get_secret_value()
+        return settings.openai_api_key
     if provider == "google_genai" and settings.google_api_key:
-        return settings.google_api_key.get_secret_value()
+        return settings.google_api_key
     if provider in ("xai", "grok") and settings.xai_api_key:
-        return settings.xai_api_key.get_secret_value()
+        return settings.xai_api_key
     if provider == "openrouter" and settings.openrouter_api_key:
-        return settings.openrouter_api_key.get_secret_value()
+        return settings.openrouter_api_key
+    if provider == "zen" and settings.zen_api_key:
+        return settings.zen_api_key
+    if provider == "opencode_go" and settings.opencode_go_api_key:
+        return settings.opencode_go_api_key
     return None
 
 
 @lru_cache
 def _get_agent_llm(provider: str, model: str) -> BaseChatModel:
-    """Initialise and cache a generic BaseChatModel for a specific agent."""
+    """Initialise and cache a generic ``BaseChatModel`` for a specific agent.
+
+    Routes the call to the correct backend based on ``provider``:
+
+    - ``openrouter`` → ``ChatOpenAI`` against OpenRouter
+    - ``zen`` → ``ChatOpenAI`` against OpenCode Zen
+    - ``opencode_go`` → ``ChatOpenAI`` against OpenCode Go
+    - ``xai`` / ``grok`` → ``ChatXAI``
+    - ``local`` → :class:`LocalChatModel` (offline-only)
+    - fallback → ``init_chat_model`` (delegates to LangChain's built-in
+      provider routing for ``openai``/``anthropic``/``google_genai``/etc.)
+
+    The factory is wrapped in :func:`functools.lru_cache` so each unique
+    ``(provider, model)`` pair is created exactly once per process. Provider
+    changes therefore require an application restart — this is intentional
+    and matches the cold-start caching model used by the rest of the app.
+    """
     settings = get_settings()
     api_key = _get_api_key(provider, settings)
 
     if provider == "openrouter":
         from langchain_openai import ChatOpenAI
+
         client = ChatOpenAI(
             model=model,
-            api_key=SecretStr(api_key) if api_key else None,
-            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+            base_url=OPENROUTER_BASE_URL,
         )
         logger.info("llm_client_initialised", provider=provider, model=model)
         return client
 
+    if provider == "zen":
+        from langchain_openai import ChatOpenAI
+
+        client = ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url=ZEN_BASE_URL,
+        )
+        logger.info("llm_client_initialised", provider=provider, model=model)
+        return client
+
+    if provider == "opencode_go":
+        from langchain_openai import ChatOpenAI
+
+        client = ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url=OPENCODE_GO_BASE_URL,
+        )
+        logger.info("llm_client_initialised", provider=provider, model=model)
+        return client
+
+    if provider in ("xai", "grok"):
+        from langchain_xai import ChatXAI
+
+        client_xai = ChatXAI(
+            model=model,
+            api_key=api_key,
+        )
+        logger.info("llm_client_initialised", provider=provider, model=model)
+        return client_xai
+
+    if provider == "local":
+        client_local = LocalChatModel(model_name=model)
+        logger.info("llm_client_initialised", provider=provider, model=model)
+        return client_local
+
     # init_chat_model will fallback to os.environ if api_key is None
     kwargs = {"api_key": api_key} if api_key else {}
 
-    client = init_chat_model(  # type: ignore[call-overload]
+    client_init = init_chat_model(  # type: ignore[call-overload]
         model=model, model_provider=provider, **kwargs
     )
     logger.info("llm_client_initialised", provider=provider, model=model)
-    return client
+    return client_init  # type: ignore[no-any-return]
 
 
 @lru_cache
 def _get_embeddings_model() -> Embeddings:
-    """Initialise and cache the generic embeddings model."""
+    """Initialise and cache the generic embeddings model.
+
+    Branches:
+
+    - ``local`` → :class:`LocalEmbeddings` returning deterministic zero-vectors
+    - ``openai`` / ``anthropic`` → :func:`init_embeddings` with the configured key
+    - any other provider → :func:`init_embeddings` (LangChain-native routing)
+    """
     settings = get_settings()
     provider = settings.embedding_provider
     api_key = _get_api_key(provider, settings)
 
+    if provider == "local":
+        dimensions = settings.embedding_dimensions
+        if dimensions < _MIN_EMBEDDING_DIMENSIONS or dimensions > _MAX_EMBEDDING_DIMENSIONS:
+            raise ValueError(
+                f"embedding_dimensions must be between "
+                f"{_MIN_EMBEDDING_DIMENSIONS} and {_MAX_EMBEDDING_DIMENSIONS}, "
+                f"got {dimensions}"
+            )
+        local_embeddings = LocalEmbeddings(dimensions=dimensions)
+        logger.info("local_embeddings_initialised", dimensions=dimensions)
+        return local_embeddings
+
     kwargs = {"api_key": api_key} if api_key else {}
 
-    embeddings = init_embeddings(model=settings.embedding_model, model_provider=provider, **kwargs)
+    embeddings = init_embeddings(model=settings.embedding_model, provider=provider, **kwargs)
     logger.info("embeddings_initialised", provider=provider, model=settings.embedding_model)
     return embeddings  # type: ignore[return-value]
 

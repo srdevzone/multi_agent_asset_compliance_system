@@ -41,9 +41,6 @@ pillow==11.0.0
 # Web search fallback
 ddgs>=9.0.0
 
-# HTTP client
-httpx==0.28.1
-
 # Retry logic
 tenacity==9.0.0
 

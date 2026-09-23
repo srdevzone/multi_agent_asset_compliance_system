@@ -20,7 +20,6 @@ evidence citations and chat responses.
 
 import hashlib
 import io
-from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -28,6 +27,7 @@ from pypdf import PdfReader
 
 from app.config import get_settings
 from app.schemas.ingest import S3Document
+from app.utils.time import utc_now_iso
 
 logger = structlog.get_logger(__name__)
 
@@ -41,8 +41,12 @@ def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     """
     if chunk_size <= 0:
         raise ValueError(f"chunk_size must be positive, got {chunk_size}")
-    if overlap < 0 or overlap >= chunk_size:
-        raise ValueError(f"overlap ({overlap}) must satisfy 0 <= overlap < chunk_size ({chunk_size})")
+    if overlap < 0:
+        raise ValueError(f"overlap must be non-negative, got {overlap}")
+    if overlap >= chunk_size:
+        raise ValueError(
+            f"overlap ({overlap}) must be less than chunk_size ({chunk_size}) to prevent infinite loop"
+        )
 
     chunks: list[str] = []
     start = 0
@@ -118,7 +122,7 @@ def _build_chunk_dict(
         "filename": filename,
         "chunk_index": chunk_idx,
         "page": page_num,
-        "embedded_at": datetime.now(UTC).isoformat(),
+        "embedded_at": utc_now_iso(),
         "text": text,
     }
     if parent_text is not None:
@@ -264,7 +268,7 @@ def load_image_document(
                 "filename": document.filename,
                 "chunk_index": 0,
                 "page": None,
-                "embedded_at": datetime.now(UTC).isoformat(),
+                "embedded_at": utc_now_iso(),
                 "text": description,
             },
         }
