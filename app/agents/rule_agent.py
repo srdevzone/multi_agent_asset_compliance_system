@@ -16,7 +16,7 @@ Populates: state["triggered_rules"]
 """
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from langchain_core.messages import HumanMessage
@@ -26,18 +26,14 @@ from app.agents.state import AuditState, get_asset_spec_dict
 from app.dependencies import get_rule_agent_llm
 from app.schemas.audit import TriggeredRule
 from app.utils.circuit_breaker import circuit_breaker
+from app.utils.formatting import format_chunks_for_prompt
 
 logger = structlog.get_logger(__name__)
 
 
 def _format_retrieved_docs(chunks: list[Any]) -> str:
     """Format retrieved document chunks for the rule analysis prompt."""
-    if not chunks:
-        return "No documents retrieved."
-    return "\n\n".join(
-        f"[{c['filename']} | page {c.get('page', 'N/A')} | {c['doc_type']}]\n{c['text']}"
-        for c in chunks
-    )
+    return format_chunks_for_prompt(chunks)
 
 
 def _format_image_findings(analyses: list[Any]) -> str:
@@ -100,7 +96,7 @@ async def rule_agent_node(state: AuditState) -> dict[str, Any]:
         messages = [HumanMessage(content=prompt)]
 
         cb = circuit_breaker("llm", failure_threshold=3, recovery_timeout=60)
-        parsed_obj: RulesOutput = await cb(structured_llm.ainvoke)(messages)  # type: ignore[assignment]
+        parsed_obj = cast(RulesOutput, await cb(structured_llm.ainvoke)(messages))
         triggered_dicts = [rule.model_dump() for rule in parsed_obj.triggered_rules]
 
         logger.info(

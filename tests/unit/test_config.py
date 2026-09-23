@@ -64,3 +64,11 @@ def test_settings_invalid_app_env(monkeypatch):
         Settings()
     # Restore cache after test
     get_settings.cache_clear()
+
+
+def test_settings_reject_invalid_chunk_relationships(monkeypatch):
+    monkeypatch.setenv("CHUNK_SIZE", "128")
+    monkeypatch.setenv("CHUNK_OVERLAP", "128")
+
+    with pytest.raises(ValueError, match="chunk_overlap"):
+        Settings()

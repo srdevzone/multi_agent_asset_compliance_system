@@ -14,7 +14,7 @@ Populates: state["verdict"]
 
 import json
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -121,7 +121,7 @@ async def verdict_agent_node(state: AuditState) -> dict[str, Any]:
         ]
 
         cb = circuit_breaker("llm", failure_threshold=3, recovery_timeout=60)
-        parsed_obj: VerdictOutput = await cb(structured_llm.ainvoke)(messages)  # type: ignore[assignment]
+        parsed_obj = cast(VerdictOutput, await cb(structured_llm.ainvoke)(messages))
         parsed = parsed_obj.model_dump()
 
         verdict = {

@@ -57,6 +57,33 @@ class Settings(BaseSettings):
     xai_api_key: SecretStr | None = Field(default=None, description="xAI Grok API key")
     openrouter_api_key: SecretStr | None = Field(default=None, description="OpenRouter API key")
 
+    # ── Reranking (Optional - local, free) ─────────────────────────────────────
+    rerank_enabled: bool = Field(
+        default=False,
+        description="Enable local reranking with FlashRank as a second-pass relevance filter",
+    )
+    rerank_model: str = Field(
+        default="ms-marco-MiniLM-L-12-v2",
+        description=(
+            "FlashRank model identifier. Options: "
+            "ms-marco-TinyBERT-L-2 (~4MB), "
+            "ms-marco-MiniLM-L-12-v2 (~34MB, recommended), "
+            "rank-T5-flan (~110MB)"
+        ),
+    )
+    rerank_max_length: int = Field(
+        default=128,
+        ge=32,
+        le=512,
+        description="Max sequence length for reranker (lower = faster, adjust based on chunk size)",
+    )
+    rerank_top_n: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Number of candidates passed to the reranker",
+    )
+
     # ── Agent Configuration ───────────────────────────────────────────────────
     image_agent_provider: str = Field(default="openai", description="LLM provider for image agent")
     image_agent_model: str = Field(default="gpt-4o", description="Model for image agent")
@@ -144,6 +171,57 @@ class Settings(BaseSettings):
     evidence_bundle_cap: int = Field(
         default=20, ge=1, le=100, description="Max number of evidence items passed to verdict LLM and returned in API"
     )
+
+    # ── Hybrid Search (BM25 + Dense) ─────────────────────────────────────────
+    hybrid_search_enabled: bool = Field(
+        default=True,
+        description="Enable hybrid search combining BM25 sparse and dense vectors",
+    )
+    hybrid_alpha: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Weight for dense score in hybrid fusion. "
+            "final_score = alpha * dense_score + (1 - alpha) * bm25_score"
+        ),
+    )
+    bm25_k1: float = Field(
+        default=1.5,
+        ge=0.0,
+        le=3.0,
+        description="BM25 term frequency saturation parameter",
+    )
+    bm25_b: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description="BM25 length normalization parameter",
+    )
+
+    # ── Parent-Document Retrieval (PDR) ───────────────────────────────────────
+    pdr_enabled: bool = Field(
+        default=True,
+        description="Enable Parent-Document Retrieval for hierarchical context",
+    )
+    pdr_parent_chunk_size: int = Field(
+        default=2048,
+        ge=512,
+        le=8192,
+        description="Parent document chunk size in characters (larger context window)",
+    )
+    pdr_child_chunk_size: int = Field(
+        default=256,
+        ge=64,
+        le=1024,
+        description="Child chunk size in characters (smaller retrieval units)",
+    )
+    pdr_child_overlap: int = Field(
+        default=32,
+        ge=0,
+        le=128,
+        description="Overlap between consecutive child chunks in characters",
+    )
     audit_timeout_seconds: int = Field(
         default=120, ge=10, le=800, description="Max time allowed for the audit graph execution before timing out"
     )
@@ -184,10 +262,16 @@ class Settings(BaseSettings):
     )
 
     @model_validator(mode="after")
-    def validate_cors(self) -> "Settings":
-        """Prevent wildcard CORS in production to mitigate SEC-1."""
+    def validate_settings(self) -> "Settings":
+        """Validate settings whose constraints depend on another field."""
         if self.app_env == "production" and "*" in self.cors_allowed_origins:
             raise ValueError("Wildcard CORS (['*']) is not allowed in production environments.")
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("chunk_overlap must be less than chunk_size.")
+        if self.pdr_child_overlap >= self.pdr_child_chunk_size:
+            raise ValueError("pdr_child_overlap must be less than pdr_child_chunk_size.")
+        if self.pdr_child_chunk_size > self.pdr_parent_chunk_size:
+            raise ValueError("pdr_child_chunk_size must not exceed pdr_parent_chunk_size.")
         return self
 
 

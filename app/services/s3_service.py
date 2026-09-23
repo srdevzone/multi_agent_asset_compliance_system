@@ -122,7 +122,7 @@ def _delete_asset_documents_sync(s3_client: Any, bucket: str, asset_id: str) -> 
             if "Contents" in page:
                 objects = [{"Key": obj["Key"]} for obj in page["Contents"]]
                 if objects:
-                    response = s3_client.delete_objects(
+                    s3_client.delete_objects(
                         Bucket=bucket,
                         Delete={"Objects": objects, "Quiet": True}
                     )

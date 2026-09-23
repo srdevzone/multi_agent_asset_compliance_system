@@ -7,8 +7,9 @@ a downstream service (Pinecone, LLM, DDG) repeatedly fails.
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from functools import wraps
-from typing import Any, Callable, TypeVar
+from typing import Any, ParamSpec, TypeVar, cast
 
 import structlog
 
@@ -17,6 +18,7 @@ from app.utils.exceptions import AssetComplianceBaseError
 logger = structlog.get_logger(__name__)
 
 T = TypeVar("T")
+P = ParamSpec("P")
 
 
 class CircuitBreakerOpenError(AssetComplianceBaseError):
@@ -30,7 +32,9 @@ class CircuitBreaker:
     CLOSED -> HALF_OPEN -> OPEN
     """
 
-    def __init__(self, name: str, failure_threshold: int = 3, recovery_timeout: int = 60):
+    def __init__(
+        self, name: str, failure_threshold: int = 3, recovery_timeout: int = 60
+    ) -> None:
         self.name = name
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
@@ -54,7 +58,7 @@ class CircuitBreaker:
 
     def _on_failure(self, exc: Exception) -> None:
         # Ignore client-side validation errors
-        if isinstance(exc, (ValueError, TypeError)):
+        if isinstance(exc, ValueError | TypeError):
             return
 
         self.failure_count += 1
@@ -64,13 +68,14 @@ class CircuitBreaker:
             self.state = "OPEN"
             logger.error("circuit_breaker_opened", circuit=self.name, threshold=self.failure_threshold)
 
-    def __call__(self, func: Callable[..., T]) -> Callable[..., T]:
+    def __call__(self, func: Callable[P, T]) -> Callable[P, T]:
         if asyncio.iscoroutinefunction(func):
             @wraps(func)
-            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
                 self._check_state()
                 try:
-                    result = await func(*args, **kwargs)
+                    async_func = cast(Callable[P, Awaitable[Any]], func)
+                    result = await async_func(*args, **kwargs)
                     self._on_success()
                     return result
                 except CircuitBreakerOpenError:
@@ -78,10 +83,10 @@ class CircuitBreaker:
                 except Exception as exc:
                     self._on_failure(exc)
                     raise
-            return async_wrapper  # type: ignore
+            return cast(Callable[P, T], async_wrapper)
         else:
             @wraps(func)
-            def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
                 self._check_state()
                 try:
                     result = func(*args, **kwargs)
@@ -92,13 +97,15 @@ class CircuitBreaker:
                 except Exception as exc:
                     self._on_failure(exc)
                     raise
-            return sync_wrapper  # type: ignore
+            return sync_wrapper
 
 
 _breakers: dict[str, CircuitBreaker] = {}
 
 
-def circuit_breaker(name: str, failure_threshold: int = 3, recovery_timeout: int = 60) -> Any:
+def circuit_breaker(
+    name: str, failure_threshold: int = 3, recovery_timeout: int = 60
+) -> CircuitBreaker:
     """Decorator to apply a named circuit breaker to a function."""
     if name not in _breakers:
         _breakers[name] = CircuitBreaker(name, failure_threshold, recovery_timeout)

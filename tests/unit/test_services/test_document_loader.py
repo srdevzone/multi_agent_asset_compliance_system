@@ -1,5 +1,7 @@
 """Unit tests for document_loader."""
 
+import pytest
+
 from app.schemas.ingest import S3Document
 from app.services import document_loader
 
@@ -50,6 +52,21 @@ def test_chunk_text_strips_empty():
     """_chunk_text should discard empty or whitespace-only chunks."""
     chunks = document_loader._chunk_text("   \n   ", chunk_size=512, overlap=64)
     assert chunks == []
+
+
+def test_chunk_text_rejects_non_advancing_overlap():
+    """Invalid overlap must fail instead of creating an infinite loop."""
+    with pytest.raises(ValueError, match="overlap"):
+        document_loader._chunk_text("content", chunk_size=10, overlap=10)
+
+
+def test_parent_child_chunks_retain_parent_context():
+    chunks = document_loader._chunk_text_parent_child(
+        "abcdefghij", parent_size=10, child_size=4, child_overlap=1
+    )
+
+    assert [chunk["child_text"] for chunk in chunks] == ["abcd", "defg", "ghij", "j"]
+    assert all(chunk["parent_text"] == "abcdefghij" for chunk in chunks)
 
 
 def test_load_image_document():

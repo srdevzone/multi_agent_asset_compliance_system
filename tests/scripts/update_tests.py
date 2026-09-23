@@ -11,7 +11,7 @@ replacements = {
 }
 
 def process_file(path):
-    with open(path, "r") as f:
+    with open(path) as f:
         content = f.read()
     original_content = content
     for old, new in replacements.items():

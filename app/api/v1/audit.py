@@ -76,6 +76,7 @@ async def _stream_audit(
 
     try:
         import asyncio
+
         from app.config import get_settings
         settings = get_settings()
 
@@ -110,7 +111,7 @@ async def _stream_audit(
                 dynamodb_client, table_name, request.run_id, final_verdict
             )
 
-    except TimeoutError as exc:
+    except TimeoutError:
         logger.error("audit_stream_timeout", run_id=request.run_id, timeout=settings.audit_timeout_seconds)
         dynamodb_service.fail_audit_run(dynamodb_client, table_name, request.run_id, f"Audit timed out after {settings.audit_timeout_seconds} seconds")
         # Yield a final error event so the client streaming doesn't just cut off silently

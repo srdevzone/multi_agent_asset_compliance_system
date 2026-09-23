@@ -50,4 +50,7 @@ tenacity==9.0.0
 # Rate limiting
 slowapi>=0.1.9
 
+# Reranking (optional, local, free - ~34MB model, no PyTorch needed)
+flashrank>=0.2.9
+
 # (No raw LLM SDKs installed)

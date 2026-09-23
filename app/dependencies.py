@@ -21,6 +21,7 @@ from langchain.embeddings import init_embeddings
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from pinecone import Index, Pinecone
+from pydantic import SecretStr
 
 from app.config import Settings, get_settings
 from app.utils.offline_clients import LocalDynamoDBClient, LocalPineconeIndex, LocalS3Client
@@ -68,11 +69,11 @@ def _get_agent_llm(provider: str, model: str) -> BaseChatModel:
         from langchain_openai import ChatOpenAI
         client = ChatOpenAI(
             model=model,
-            api_key=api_key,
+            api_key=SecretStr(api_key) if api_key else None,
             base_url="https://openrouter.ai/api/v1",
         )
         logger.info("llm_client_initialised", provider=provider, model=model)
-        return client  # type: ignore[return-value]
+        return client
 
     # init_chat_model will fallback to os.environ if api_key is None
     kwargs = {"api_key": api_key} if api_key else {}
@@ -81,7 +82,7 @@ def _get_agent_llm(provider: str, model: str) -> BaseChatModel:
         model=model, model_provider=provider, **kwargs
     )
     logger.info("llm_client_initialised", provider=provider, model=model)
-    return client  # type: ignore[no-any-return]
+    return client
 
 
 @lru_cache

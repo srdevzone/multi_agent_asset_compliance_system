@@ -15,10 +15,10 @@ All document types are processed sequentially within a single Lambda invocation.
 
 import asyncio
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import structlog
-from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
@@ -122,6 +122,7 @@ async def _ingest_document(
     ]
 
     upserted = pinecone_service.upsert_vectors(index, asset_id, vectors)
+
     logger.info(
         "document_ingested",
         doc_id=document.doc_id,
@@ -222,14 +223,14 @@ async def ingest_documents(
     description="Accepts multiple files via form upload, writes them to S3, and embeds/upserts them into Pinecone.",
 )
 async def upload_and_ingest_documents(
-    asset_id: str = Form(..., min_length=1),
-    event: str = Form(..., pattern="^(create|add)$"),
-    files: list[UploadFile] = File(...),
-    index: PineconeDep = None,
-    embeddings: EmbeddingsDep = None,
-    image_llm: ImageLLMDep = None,
-    s3_client: S3Dep = None,
-    settings: SettingsDep = None,
+    asset_id: Annotated[str, Form(min_length=1)],
+    event: Annotated[str, Form(pattern="^(create|add)$")],
+    files: Annotated[list[UploadFile], File()],
+    index: PineconeDep,
+    embeddings: EmbeddingsDep,
+    image_llm: ImageLLMDep,
+    s3_client: S3Dep,
+    settings: SettingsDep,
 ) -> IngestResponse:
     """Upload files to S3 and trigger Pinecone vector ingestion."""
     log = logger.bind(asset_id=asset_id, event=event)
@@ -262,6 +263,13 @@ async def upload_and_ingest_documents(
 
         # Determine doc_type from filename extension
         ext = safe_name.lower().rsplit(".", 1)[-1] if "." in safe_name else ""
+        doc_type: Literal[
+            "user_manual",
+            "safety_sheet",
+            "compliance_spec",
+            "installation_image",
+            "other",
+        ]
         if ext in ("jpg", "jpeg", "png", "webp", "gif"):
             doc_type = "installation_image"
         elif ext == "pdf":

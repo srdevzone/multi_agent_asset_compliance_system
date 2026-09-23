@@ -7,10 +7,10 @@ Provides endpoints to:
 """
 
 import hmac
-from fastapi import APIRouter, HTTPException, status
+
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.config import get_settings
 from app.dependencies import SettingsDep
 
 router = APIRouter(prefix="/auth", tags=["auth"])

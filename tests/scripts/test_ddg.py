@@ -1,13 +1,17 @@
-from ddgs import AsyncDDGS
 import asyncio
 import json
 
-async def main():
-    try:
-        async with AsyncDDGS() as ddgs:
-            results = await ddgs.atext("Apple", max_results=3)
-            print("RESULTS", json.dumps(results, indent=2))
-    except Exception as e:
-        print("ERROR", e)
+from ddgs import DDGS
 
-asyncio.run(main())
+
+async def main() -> None:
+    """Run a manual DDG smoke test without executing during pytest collection."""
+    try:
+        results = await asyncio.to_thread(lambda: list(DDGS().text("Apple", max_results=3)))
+        print("RESULTS", json.dumps(results, indent=2))
+    except Exception as exc:
+        print("ERROR", exc)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

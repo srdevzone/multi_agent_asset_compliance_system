@@ -22,7 +22,7 @@ Authentication:
 import structlog
 from fastapi import APIRouter, status
 
-from app.dependencies import DynamoDBDep, PineconeDep, SettingsDep, S3Dep
+from app.dependencies import DynamoDBDep, PineconeDep, S3Dep, SettingsDep
 from app.schemas.admin import AssetDeleteResponse, AssetStatsResponse
 from app.services import dynamodb_service, pinecone_service, s3_service
 

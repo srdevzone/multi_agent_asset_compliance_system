@@ -41,6 +41,7 @@ class RetrievedChunk(TypedDict):
     page: int | None
     text: str
     score: float
+    parent_text: str | None  # Parent context for PDR mode
 
 
 class AuditState(TypedDict, total=False):
@@ -82,7 +83,7 @@ class AuditState(TypedDict, total=False):
 
 def _escape_dict(d: dict[str, Any]) -> dict[str, Any]:
     """Recursively HTML-escape string values in a dictionary to prevent prompt injection (SEC-2)."""
-    result = {}
+    result: dict[str, Any] = {}
     for k, v in d.items():
         if isinstance(v, str):
             result[k] = html.escape(v)
@@ -115,4 +116,3 @@ def get_asset_spec_dict(state: Any) -> dict[str, Any]:
     if hasattr(spec, "model_dump"):
         return _escape_dict(cast(dict[str, Any], spec.model_dump()))
     return {}
-

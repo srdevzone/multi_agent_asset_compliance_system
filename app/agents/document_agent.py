@@ -6,6 +6,9 @@ top-k semantic query across the entire asset namespace (no doc_type filter)
 so that all document types (user_manual, safety_sheet, compliance_spec,
 installation_image) can contribute to the audit.
 
+When hybrid search is enabled, combines dense vector similarity with BM25
+keyword matching for improved retrieval of compliance-specific terms.
+
 The query text is constructed from asset spec + auditor remarks to maximise
 semantic relevance across the diverse document types.
 
@@ -33,6 +36,9 @@ async def document_agent_node(state: AuditState) -> dict[str, Any]:
     embeds it, and queries the asset's Pinecone namespace with no doc_type
     filter so all document types can contribute.
 
+    When hybrid search is enabled, uses score fusion to combine dense
+    semantic similarity with BM25 keyword matching.
+
     Returns:
         dict with keys: retrieved_chunks, documents_consulted
         On error: also sets errors key
@@ -57,10 +63,13 @@ async def document_agent_node(state: AuditState) -> dict[str, Any]:
 
     try:
         query_vector = await embed_query(embeddings, query_text)
-        raw = pinecone_service.query_namespace(
+
+        # Use smart query that automatically dispatches between hybrid and dense-only
+        raw = await pinecone_service.smart_query(
             index,
             asset_id,
             query_vector,
+            query_text,
             top_k=settings.retrieval_top_k_audit,
         )
 
@@ -72,6 +81,8 @@ async def document_agent_node(state: AuditState) -> dict[str, Any]:
                 "page": r["metadata"].get("page"),
                 "text": r["metadata"].get("text", ""),
                 "score": r["score"],
+                # Include parent text for PDR context expansion
+                "parent_text": r["metadata"].get("parent_text"),
             }
             for r in raw
         ]
@@ -82,6 +93,7 @@ async def document_agent_node(state: AuditState) -> dict[str, Any]:
             asset_id=asset_id,
             chunks_retrieved=len(chunks),
             unique_documents=len(doc_ids),
+            hybrid_search=settings.hybrid_search_enabled,
         )
         return {"retrieved_chunks": chunks, "documents_consulted": doc_ids}
 
